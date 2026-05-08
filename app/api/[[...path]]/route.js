@@ -216,11 +216,27 @@ async function handleRoute(request, { params }) {
       if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
       const body = await request.json()
       const update = { updated_at: new Date() }
-      if (body.status) update.status = body.status
+      if (body.status) {
+        update.status = body.status
+        if (body.status === 'preparing') update.accepted_at = new Date()
+        if (body.status === 'ready') update.ready_at = new Date()
+        if (body.status === 'out') update.out_at = new Date()
+        if (body.status === 'delivered') update.delivered_at = new Date()
+      }
+      if (body.priority !== undefined) update.priority = !!body.priority
       if (body.payment_status) update.payment_status = body.payment_status
       await db.collection('orders').updateOne({ id: path[1] }, { $set: update })
       const updated = await db.collection('orders').findOne({ id: path[1] })
       return handleCORS(NextResponse.json(stripId(updated)))
+    }
+
+    // GET /kitchen/orders - active orders for kitchen (admin)
+    if (route === '/kitchen/orders' && method === 'GET') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const orders = await db.collection('orders').find({
+        status: { $in: ['received', 'preparing', 'ready'] }
+      }).sort({ priority: -1, created_at: 1 }).toArray()
+      return handleCORS(NextResponse.json(orders.map(stripId)))
     }
 
     // ---------------- Reservations ----------------

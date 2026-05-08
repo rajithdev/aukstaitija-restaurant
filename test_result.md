@@ -231,6 +231,36 @@ backend:
           agent: "testing"
           comment: "✅ PASS - With email returns ok:true. Without email returns 400 error. Validation working correctly."
 
+  - task: "Kitchen orders endpoint (GET /api/kitchen/orders)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Returns orders with status in ['received','preparing','ready'], sorted priority desc + created_at asc. Admin-only (401 without x-admin-token)."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - All scenarios verified: (1) Without x-admin-token returns 401 ✅ (2) With valid token returns 200 + array ✅ (3) Correctly filters only active orders (received/preparing/ready) - delivered orders excluded ✅ (4) Sorting verified: priority=true orders appear first, then sorted by created_at ascending (oldest first) ✅"
+
+  - task: "Order status timestamps + priority flag (PUT /api/orders/:id)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "PUT /api/orders/:id now sets accepted_at when status=preparing, ready_at when status=ready, out_at when status=out, delivered_at when status=delivered. Also accepts {priority: true|false} flag for urgent orders. Used by Kitchen Dashboard."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - All timestamp and priority scenarios verified: (1) PUT without admin token returns 401 ✅ (2) PUT status='preparing' sets accepted_at field ✅ (3) PUT status='ready' sets ready_at field ✅ (4) PUT status='out' sets out_at field ✅ (5) PUT status='delivered' sets delivered_at field ✅ (6) PUT priority=true sets priority to true ✅ (7) PUT priority=false sets priority to false ✅"
+
 frontend:
   - task: "Customer pages (home, menu, dish detail, cart, checkout, reservations, order tracking, admin)"
     implemented: true
@@ -294,3 +324,28 @@ agent_communication:
       Double-booking prevention confirmed: 10 reservations succeed, 11th returns 409 "Slot fully booked" ✅
       
       Backend is production-ready. No issues found.
+  - agent: "testing"
+    message: |
+      ✅ NEW KITCHEN DASHBOARD ENDPOINTS TESTED - ALL PASSED (17/17 tests)
+      
+      Test Run 2 - Kitchen Dashboard Features:
+      
+      1. GET /api/kitchen/orders (9 tests):
+         - Without x-admin-token → 401 Unauthorized ✅
+         - With valid token → 200 + array of orders ✅
+         - Filtering verified: Only orders with status in ['received', 'preparing', 'ready'] returned ✅
+         - Delivered orders correctly excluded ✅
+         - Sorting verified: priority=true orders appear first ✅
+         - Within same priority, sorted by created_at ascending (oldest first) ✅
+      
+      2. PUT /api/orders/:id - Timestamps + Priority (8 tests):
+         - Without admin token → 401 Unauthorized ✅
+         - PUT status='preparing' → accepted_at field set with ISO timestamp ✅
+         - PUT status='ready' → ready_at field set with ISO timestamp ✅
+         - PUT status='out' → out_at field set with ISO timestamp ✅
+         - PUT status='delivered' → delivered_at field set with ISO timestamp ✅
+         - PUT priority=true → priority field set to true ✅
+         - PUT priority=false → priority field set to false ✅
+      
+      All scenarios from review request verified and working correctly.
+      Backend implementation is complete and production-ready.

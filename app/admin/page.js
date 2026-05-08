@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
 import { Button } from '@/components/ui/button'
@@ -7,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 import { useApp } from '@/lib/AppContext'
-import { LayoutDashboard, Utensils, ShoppingBag, CalendarDays, BarChart3, Plus, Edit, Trash2, X, LogOut } from 'lucide-react'
+import { LayoutDashboard, Utensils, ShoppingBag, CalendarDays, BarChart3, Plus, Edit, Trash2, X, LogOut, ChefHat } from 'lucide-react'
 import { toast } from 'sonner'
 
 function AdminPage() {
@@ -114,7 +115,10 @@ function AdminPage() {
             <p className="text-primary text-xs uppercase tracking-[0.4em] mb-2">Operations</p>
             <h1 className="font-serif text-4xl">{t('admin.title')}</h1>
           </div>
-          <Button variant="outline" onClick={logout}><LogOut className="h-4 w-4 mr-2" /> Logout</Button>
+          <div className="flex gap-2">
+            <Link href="/kitchen"><Button variant="outline"><ChefHat className="h-4 w-4 mr-2" /> Kitchen Live</Button></Link>
+            <Button variant="outline" onClick={logout}><LogOut className="h-4 w-4 mr-2" /> Logout</Button>
+          </div>
         </div>
 
         <div className="flex gap-2 border-b border-border mb-8 overflow-x-auto">

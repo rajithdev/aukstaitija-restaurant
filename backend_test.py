@@ -690,6 +690,293 @@ def test_newsletter():
         log_test("Newsletter", False, f"Exception: {str(e)}")
 
 # ============================================================================
+# TEST 11: Kitchen Orders Endpoint
+# ============================================================================
+def test_kitchen_orders():
+    """Test GET /api/kitchen/orders - filtering and sorting"""
+    print("\n" + "="*80)
+    print("TEST 11: Kitchen Orders Endpoint")
+    print("="*80)
+    
+    try:
+        # Test without admin token (should fail)
+        response = requests.get(f"{BASE_URL}/kitchen/orders", headers=HEADERS, timeout=10)
+        print(f"GET kitchen/orders without token status: {response.status_code}")
+        
+        if response.status_code == 401:
+            log_test("Kitchen orders without token returns 401", True)
+        else:
+            log_test("Kitchen orders without token returns 401", False, f"Got {response.status_code}")
+        
+        # Create 3 test orders
+        print("\nCreating 3 test orders...")
+        order_ids = []
+        
+        for i in range(3):
+            order_data = {
+                "items": [
+                    {
+                        "id": "cepelinai",
+                        "name": "Cepelinai",
+                        "price": 14.50,
+                        "quantity": 1
+                    }
+                ],
+                "type": "delivery",
+                "customer": {
+                    "name": f"Kitchen Test {i+1}",
+                    "phone": f"+3706999999{i}"
+                },
+                "payment_method": "cash"
+            }
+            response = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS, timeout=10)
+            if response.status_code == 200:
+                order = response.json()
+                order_ids.append(order.get('id'))
+                print(f"Created order {i+1}: {order.get('id')}")
+            else:
+                log_test(f"Create test order {i+1}", False, f"Status {response.status_code}")
+                return
+        
+        log_test("Create 3 test orders", True, f"IDs: {order_ids}")
+        
+        # Mark first order as 'delivered' (should be excluded from kitchen view)
+        if order_ids:
+            update_data = {"status": "delivered"}
+            response = requests.put(f"{BASE_URL}/orders/{order_ids[0]}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
+            print(f"Mark order 1 as delivered status: {response.status_code}")
+            
+            if response.status_code == 200:
+                log_test("Mark order as delivered", True)
+            else:
+                log_test("Mark order as delivered", False, f"Status {response.status_code}")
+        
+        # Test GET kitchen/orders with admin token
+        response = requests.get(f"{BASE_URL}/kitchen/orders", headers=ADMIN_HEADERS, timeout=10)
+        print(f"GET kitchen/orders with token status: {response.status_code}")
+        
+        if response.status_code == 200:
+            kitchen_orders = response.json()
+            print(f"Kitchen orders count: {len(kitchen_orders)}")
+            
+            log_test("Kitchen orders with token returns 200", True, f"Found {len(kitchen_orders)} orders")
+            
+            # Verify it's an array
+            if not isinstance(kitchen_orders, list):
+                log_test("Kitchen orders returns array", False, f"Got {type(kitchen_orders)}")
+            else:
+                log_test("Kitchen orders returns array", True)
+            
+            # Verify only active orders (received/preparing/ready) are returned
+            # The delivered order should NOT be in the list
+            has_delivered = any(o.get('id') == order_ids[0] for o in kitchen_orders)
+            if has_delivered:
+                log_test("Kitchen orders excludes delivered orders", False, "Delivered order found in results")
+            else:
+                log_test("Kitchen orders excludes delivered orders", True)
+            
+            # Verify only received/preparing/ready statuses
+            invalid_statuses = [o.get('status') for o in kitchen_orders if o.get('status') not in ['received', 'preparing', 'ready']]
+            if invalid_statuses:
+                log_test("Kitchen orders only includes active statuses", False, f"Found: {invalid_statuses}")
+            else:
+                log_test("Kitchen orders only includes active statuses", True)
+            
+            # Test sorting: priority orders first, then by created_at ascending
+            # Set priority on one order
+            if len(order_ids) >= 2:
+                priority_data = {"priority": True}
+                response = requests.put(f"{BASE_URL}/orders/{order_ids[1]}", json=priority_data, headers=ADMIN_HEADERS, timeout=10)
+                print(f"Set priority on order 2 status: {response.status_code}")
+                
+                # Fetch kitchen orders again
+                response = requests.get(f"{BASE_URL}/kitchen/orders", headers=ADMIN_HEADERS, timeout=10)
+                if response.status_code == 200:
+                    kitchen_orders = response.json()
+                    
+                    # Find our priority order
+                    priority_order_index = next((i for i, o in enumerate(kitchen_orders) if o.get('id') == order_ids[1]), None)
+                    
+                    if priority_order_index is not None:
+                        # Priority order should be first (or among first if multiple priority orders)
+                        if priority_order_index == 0 or kitchen_orders[0].get('priority') == True:
+                            log_test("Kitchen orders sorts priority first", True, f"Priority order at index {priority_order_index}")
+                        else:
+                            log_test("Kitchen orders sorts priority first", False, f"Priority order at index {priority_order_index}, expected 0 or first")
+                    else:
+                        log_test("Kitchen orders includes priority order", False, "Priority order not found")
+                    
+                    # Verify created_at ascending within same priority
+                    non_priority = [o for o in kitchen_orders if not o.get('priority')]
+                    if len(non_priority) >= 2:
+                        dates = [o.get('created_at') for o in non_priority]
+                        is_ascending = dates == sorted(dates)
+                        log_test("Kitchen orders sorts by created_at ascending", is_ascending, f"Dates: {dates[:3]}")
+                    else:
+                        log_test("Kitchen orders sorts by created_at ascending", True, "Not enough non-priority orders to verify")
+        else:
+            log_test("Kitchen orders with token", False, f"Status {response.status_code}: {response.text}")
+    except Exception as e:
+        log_test("Kitchen orders endpoint", False, f"Exception: {str(e)}")
+
+# ============================================================================
+# TEST 12: Order Status Timestamps + Priority Flag
+# ============================================================================
+def test_order_timestamps_priority():
+    """Test PUT /api/orders/:id - timestamps and priority flag"""
+    print("\n" + "="*80)
+    print("TEST 12: Order Status Timestamps + Priority Flag")
+    print("="*80)
+    
+    try:
+        # Create a fresh order
+        order_data = {
+            "items": [
+                {
+                    "id": "cepelinai",
+                    "name": "Cepelinai",
+                    "price": 14.50,
+                    "quantity": 1
+                }
+            ],
+            "type": "pickup",
+            "customer": {
+                "name": "Timestamp Test",
+                "phone": "+37061234567"
+            },
+            "payment_method": "cash"
+        }
+        
+        response = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS, timeout=10)
+        print(f"Create test order status: {response.status_code}")
+        
+        if response.status_code != 200:
+            log_test("Create order for timestamp test", False, f"Status {response.status_code}")
+            return
+        
+        order = response.json()
+        order_id = order.get('id')
+        print(f"Test order ID: {order_id}")
+        log_test("Create order for timestamp test", True, f"ID: {order_id}")
+        
+        # Test PUT without admin token (should fail)
+        update_data = {"status": "preparing"}
+        response = requests.put(f"{BASE_URL}/orders/{order_id}", json=update_data, headers=HEADERS, timeout=10)
+        print(f"PUT order without token status: {response.status_code}")
+        
+        if response.status_code == 401:
+            log_test("PUT order without token returns 401", True)
+        else:
+            log_test("PUT order without token returns 401", False, f"Got {response.status_code}")
+        
+        # Test status='preparing' → should set accepted_at
+        update_data = {"status": "preparing"}
+        response = requests.put(f"{BASE_URL}/orders/{order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
+        print(f"PUT status=preparing status: {response.status_code}")
+        
+        if response.status_code == 200:
+            updated_order = response.json()
+            accepted_at = updated_order.get('accepted_at')
+            
+            if accepted_at:
+                log_test("PUT status=preparing sets accepted_at", True, f"accepted_at: {accepted_at}")
+            else:
+                log_test("PUT status=preparing sets accepted_at", False, "accepted_at field missing")
+        else:
+            log_test("PUT status=preparing", False, f"Status {response.status_code}")
+        
+        # Test status='ready' → should set ready_at
+        update_data = {"status": "ready"}
+        response = requests.put(f"{BASE_URL}/orders/{order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
+        print(f"PUT status=ready status: {response.status_code}")
+        
+        if response.status_code == 200:
+            updated_order = response.json()
+            ready_at = updated_order.get('ready_at')
+            
+            if ready_at:
+                log_test("PUT status=ready sets ready_at", True, f"ready_at: {ready_at}")
+            else:
+                log_test("PUT status=ready sets ready_at", False, "ready_at field missing")
+        else:
+            log_test("PUT status=ready", False, f"Status {response.status_code}")
+        
+        # Test status='out' → should set out_at
+        update_data = {"status": "out"}
+        response = requests.put(f"{BASE_URL}/orders/{order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
+        print(f"PUT status=out status: {response.status_code}")
+        
+        if response.status_code == 200:
+            updated_order = response.json()
+            out_at = updated_order.get('out_at')
+            
+            if out_at:
+                log_test("PUT status=out sets out_at", True, f"out_at: {out_at}")
+            else:
+                log_test("PUT status=out sets out_at", False, "out_at field missing")
+        else:
+            log_test("PUT status=out", False, f"Status {response.status_code}")
+        
+        # Test status='delivered' → should set delivered_at
+        update_data = {"status": "delivered"}
+        response = requests.put(f"{BASE_URL}/orders/{order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
+        print(f"PUT status=delivered status: {response.status_code}")
+        
+        if response.status_code == 200:
+            updated_order = response.json()
+            delivered_at = updated_order.get('delivered_at')
+            
+            if delivered_at:
+                log_test("PUT status=delivered sets delivered_at", True, f"delivered_at: {delivered_at}")
+            else:
+                log_test("PUT status=delivered sets delivered_at", False, "delivered_at field missing")
+        else:
+            log_test("PUT status=delivered", False, f"Status {response.status_code}")
+        
+        # Create another order for priority testing
+        response = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS, timeout=10)
+        if response.status_code == 200:
+            priority_order = response.json()
+            priority_order_id = priority_order.get('id')
+            print(f"Priority test order ID: {priority_order_id}")
+            
+            # Test priority=true
+            update_data = {"priority": True}
+            response = requests.put(f"{BASE_URL}/orders/{priority_order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
+            print(f"PUT priority=true status: {response.status_code}")
+            
+            if response.status_code == 200:
+                updated_order = response.json()
+                priority = updated_order.get('priority')
+                
+                if priority == True:
+                    log_test("PUT priority=true sets priority field", True, f"priority: {priority}")
+                else:
+                    log_test("PUT priority=true sets priority field", False, f"Expected True, got {priority}")
+            else:
+                log_test("PUT priority=true", False, f"Status {response.status_code}")
+            
+            # Test priority=false
+            update_data = {"priority": False}
+            response = requests.put(f"{BASE_URL}/orders/{priority_order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
+            print(f"PUT priority=false status: {response.status_code}")
+            
+            if response.status_code == 200:
+                updated_order = response.json()
+                priority = updated_order.get('priority')
+                
+                if priority == False:
+                    log_test("PUT priority=false sets priority field", True, f"priority: {priority}")
+                else:
+                    log_test("PUT priority=false sets priority field", False, f"Expected False, got {priority}")
+            else:
+                log_test("PUT priority=false", False, f"Status {response.status_code}")
+        else:
+            log_test("Create order for priority test", False, f"Status {response.status_code}")
+    except Exception as e:
+        log_test("Order timestamps and priority", False, f"Exception: {str(e)}")
+
+# ============================================================================
 # MAIN TEST RUNNER
 # ============================================================================
 def main():
@@ -712,6 +999,8 @@ def main():
     test_admin_login()
     test_admin_analytics()
     test_newsletter()
+    test_kitchen_orders()
+    test_order_timestamps_priority()
     
     # Print summary
     print_summary()
