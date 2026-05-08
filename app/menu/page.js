@@ -20,7 +20,9 @@ function MenuPage() {
   const [sort, setSort] = useState('popular')
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => { fetch('/api/categories').then(r => r.json()).then(setCategories) }, [])
+  useEffect(() => {
+    fetch('/api/categories').then(r => r.json()).then(d => setCategories(Array.isArray(d) ? d : []))
+  }, [])
 
   useEffect(() => {
     setLoading(true)

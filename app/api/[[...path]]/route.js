@@ -3,16 +3,14 @@ import { v4 as uuidv4 } from 'uuid'
 import { NextResponse } from 'next/server'
 import { CATEGORIES, DISHES } from '@/lib/seedData'
 
-let client
-let db
+let clientPromise
 
 async function connectToMongo() {
-  if (!client) {
-    client = new MongoClient(process.env.MONGO_URL)
-    await client.connect()
-    db = client.db(process.env.DB_NAME || 'aukstaitija_restaurant')
+  if (!clientPromise) {
+    const client = new MongoClient(process.env.MONGO_URL)
+    clientPromise = client.connect().then(c => c.db(process.env.DB_NAME || 'aukstaitija_restaurant'))
   }
-  return db
+  return clientPromise
 }
 
 function handleCORS(response) {
