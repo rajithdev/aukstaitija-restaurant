@@ -188,6 +188,47 @@ function AdminPage() {
                 </p>
               </Card>
             )}
+            {analytics.waiter && (
+              <Card className="p-6">
+                <h3 className="font-serif text-2xl mb-4 flex items-center gap-2">
+                  <Utensils className="h-5 w-5 text-primary" /> {t('admin.waiter_perf')}
+                </h3>
+                {analytics.waiter.served_count === 0 ? (
+                  <p className="text-sm text-muted-foreground">{t('admin.waiter_no_data')}</p>
+                ) : (
+                  <>
+                    <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                      <div>
+                        <p className="text-xs uppercase tracking-wider text-muted-foreground">{t('admin.waiter_served_today')}</p>
+                        <p className="font-serif text-3xl text-primary">{analytics.waiter.served_today}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wider text-muted-foreground">{t('admin.waiter_served_total')}</p>
+                        <p className="font-serif text-3xl">{analytics.waiter.served_count}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wider text-muted-foreground">{t('admin.waiter_avg_pickup')}</p>
+                        <p className="font-serif text-3xl">{analytics.waiter.avg_pickup_minutes} <span className="text-base text-muted-foreground">{t('admin.mins')}</span></p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">n={analytics.waiter.sample_size?.pickup ?? 0}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wider text-muted-foreground">{t('admin.waiter_avg_serve')}</p>
+                        <p className="font-serif text-3xl">{analytics.waiter.avg_serve_minutes} <span className="text-base text-muted-foreground">{t('admin.mins')}</span></p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">n={analytics.waiter.sample_size?.serve ?? 0}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wider text-muted-foreground">{t('admin.waiter_avg_kitchen_to_table')}</p>
+                        <p className="font-serif text-3xl text-primary">{analytics.waiter.avg_kitchen_to_table_minutes} <span className="text-base text-muted-foreground">{t('admin.mins')}</span></p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">n={analytics.waiter.sample_size?.kitchen_to_table ?? 0}</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-4">
+                      Pickup = ready → waiter took the plate · Serve = waiter took it → placed on table · Kitchen → table = full pass-to-guest time.
+                    </p>
+                  </>
+                )}
+              </Card>
+            )}
           </div>
         )}
 
@@ -252,6 +293,16 @@ function AdminPage() {
                       <p className="text-sm">{o.customer?.name} · {o.customer?.phone}</p>
                       {o.address?.address && <p className="text-xs text-muted-foreground">{o.address.address}, {o.address.city} {o.address.zip} {o.delivery_zone_name && `· ${o.delivery_zone_name}`}</p>}
                       <p className="text-xs text-muted-foreground mt-1">{o.items?.length} items · €{o.total?.toFixed(2)} · {new Date(o.created_at).toLocaleString()}</p>
+                      {(o.waiter_picked_up_at || o.served_at) && (
+                        <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
+                          {o.waiter_picked_up_at && (
+                            <span>🤚 Picked up: <span className="text-foreground">{new Date(o.waiter_picked_up_at).toLocaleTimeString()}</span></span>
+                          )}
+                          {o.served_at && (
+                            <span>🍽️ Served: <span className="text-foreground">{new Date(o.served_at).toLocaleTimeString()}</span></span>
+                          )}
+                        </div>
+                      )}
                       <details className="mt-2 text-xs"><summary className="cursor-pointer text-primary">Items</summary>
                         <ul className="mt-2 space-y-1">{o.items?.map(i => <li key={i.id}>{i.quantity}× {i.name}</li>)}</ul>
                       </details>

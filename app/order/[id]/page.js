@@ -8,31 +8,31 @@ import { Card } from '@/components/ui/card'
 import { useApp } from '@/lib/AppContext'
 import { CheckCircle2, ChefHat, Clock, Truck, PackageCheck, Bike, Map, Utensils, Soup, Hand } from 'lucide-react'
 
-// Each tracking flow has its own stages so the wording feels right for the
-// channel — a delivery courier story, a pickup counter story, or a dine-in
-// table-side story. Keep keys stable: progressIndex maps order state to index.
+// Stage definitions are language-agnostic — each has a stable `key` plus the
+// translation `path` under track_stage.<kind>.<key>. Display labels come from
+// the i18n layer at render time so EN/LT switching is instant.
 const STAGES_DELIVERY = [
-  { key: 'received', label: 'Order received', icon: Clock },
-  { key: 'preparing', label: 'Preparing', icon: ChefHat },
-  { key: 'courier_requested', label: 'Courier requested', icon: Bike },
-  { key: 'ready', label: 'Ready', icon: PackageCheck },
-  { key: 'picked_up', label: 'Picked up', icon: Truck },
-  { key: 'delivered', label: 'Delivered', icon: CheckCircle2 },
+  { key: 'received', icon: Clock },
+  { key: 'preparing', icon: ChefHat },
+  { key: 'courier_requested', icon: Bike },
+  { key: 'ready', icon: PackageCheck },
+  { key: 'picked_up', icon: Truck },
+  { key: 'delivered', icon: CheckCircle2 },
 ]
 
 const STAGES_PICKUP = [
-  { key: 'received', label: 'Order received', icon: Clock },
-  { key: 'preparing', label: 'Preparing', icon: ChefHat },
-  { key: 'ready', label: 'Ready for pickup', icon: PackageCheck },
-  { key: 'delivered', label: 'Picked up', icon: CheckCircle2 },
+  { key: 'received', icon: Clock },
+  { key: 'preparing', icon: ChefHat },
+  { key: 'ready', icon: PackageCheck },
+  { key: 'delivered', icon: CheckCircle2 },
 ]
 
 const STAGES_DINEIN = [
-  { key: 'received', label: 'Order received', icon: Clock },
-  { key: 'confirmed', label: 'Confirmed by kitchen', icon: ChefHat },
-  { key: 'in_kitchen', label: 'In the kitchen', icon: Soup },
-  { key: 'plated', label: 'Being plated', icon: PackageCheck },
-  { key: 'served', label: 'Served to your table', icon: Utensils },
+  { key: 'received', icon: Clock },
+  { key: 'confirmed', icon: ChefHat },
+  { key: 'in_kitchen', icon: Soup },
+  { key: 'plated', icon: PackageCheck },
+  { key: 'served', icon: Utensils },
 ]
 
 const PROVIDER_BADGE = {
@@ -75,21 +75,6 @@ function progressIndex(order, kind) {
   return 0
 }
 
-const DINEIN_HINTS = {
-  received: 'We have your order — the kitchen will pick it up shortly.',
-  confirmed: 'A chef just confirmed your order.',
-  in_kitchen: 'Your dish is on the stove right now.',
-  plated: 'Your dish is being plated — a waiter will bring it to your table.',
-  served: 'Bon appétit — enjoy your meal!',
-}
-
-const PICKUP_HINTS = {
-  received: "We've got your order — the kitchen is starting now.",
-  preparing: 'Our chefs are preparing your order.',
-  ready: 'Ready for pickup at the counter — please come and collect.',
-  delivered: 'Thanks for picking up — see you next time!',
-}
-
 function OrderTrack() {
   const params = useParams()
   const { t, lang } = useApp()
@@ -125,15 +110,33 @@ function OrderTrack() {
 
   let headlineLabel
   if (currentIdx < 0) {
-    headlineLabel = 'Cancelled'
+    headlineLabel = t('track_stage.cancelled') || 'Cancelled'
   } else if (isDelivery) {
     headlineLabel = isReadyWaitingCourier && !courierAlreadyRequested
-      ? 'Ready · Calling courier'
+      ? t('track_stage.headline_calling_courier')
       : isReadyWaitingCourier && courierAlreadyRequested
-        ? 'Ready · Waiting for courier'
-        : stages[currentIdx].label
+        ? t('track_stage.headline_waiting_courier')
+        : t(`track_stage.${kind}.${stages[currentIdx].key}`)
   } else {
-    headlineLabel = stages[currentIdx].label
+    headlineLabel = t(`track_stage.${kind}.${stages[currentIdx].key}`)
+  }
+
+  // Pick a per-stage hint based on the current key. Delivery's "ready" stage
+  // has two variants depending on whether the courier has been called.
+  const hintFor = (s) => {
+    if (kind === 'delivery' && s.key === 'ready') {
+      return courierAlreadyRequested
+        ? t('track_stage.delivery.ready_hint_waiting')
+        : t('track_stage.delivery.ready_hint_calling')
+    }
+    if (kind === 'delivery' && s.key === 'courier_requested') {
+      const provider = providerBadge?.label || 'Courier'
+      // Inject provider name into the (otherwise generic) hint so the guest
+      // sees who is actually delivering.
+      const tpl = t('track_stage.delivery.courier_requested_hint')
+      return tpl.replace(/^Courier|^Kurjeris/, provider)
+    }
+    return t(`track_stage.${kind}.${s.key}_hint`)
   }
 
   return (
@@ -156,14 +159,14 @@ function OrderTrack() {
             {isDineIn && order.table_number && (
               <div className="inline-flex items-center gap-2 mt-1">
                 <span className="text-xs uppercase tracking-wider px-3 py-1 rounded-full bg-primary/15 text-primary">
-                  <Utensils className="h-3 w-3 inline mr-1" /> Table {order.table_number}
+                  <Utensils className="h-3 w-3 inline mr-1" /> {t('track_stage.table')} {order.table_number}
                 </span>
               </div>
             )}
             {!isDelivery && !isDineIn && (
               <div className="inline-flex items-center gap-2 mt-1">
                 <span className="text-xs uppercase tracking-wider px-3 py-1 rounded-full bg-muted text-muted-foreground">
-                  <PackageCheck className="h-3 w-3 inline mr-1" /> Pickup
+                  <PackageCheck className="h-3 w-3 inline mr-1" /> {t('track_stage.pickup_badge')}
                 </span>
               </div>
             )}
@@ -176,27 +179,15 @@ function OrderTrack() {
                 const Icon = s.icon
                 const reached = i <= currentIdx
                 const isCurrent = i === currentIdx
+                const label = t(`track_stage.${kind}.${s.key}`)
                 return (
                   <li key={s.key} className="ml-6">
                     <div className={`absolute -left-3 w-6 h-6 rounded-full flex items-center justify-center ${reached ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'} ${isCurrent ? 'ring-4 ring-primary/30 animate-pulse' : ''}`}>
                       <Icon className="h-3 w-3" />
                     </div>
-                    <p className={`text-sm font-medium ${reached ? 'text-foreground' : 'text-muted-foreground'}`}>{s.label}</p>
+                    <p className={`text-sm font-medium ${reached ? 'text-foreground' : 'text-muted-foreground'}`}>{label}</p>
                     {isCurrent && (
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {kind === 'delivery' && (
-                          <>
-                            {s.key === 'preparing' && 'Our kitchen is preparing your order…'}
-                            {s.key === 'courier_requested' && `${providerBadge?.label || 'Courier'} has been called and is on the way to the restaurant`}
-                            {s.key === 'ready' && (courierAlreadyRequested ? 'Waiting for courier to pick up your order' : 'Calling a courier now')}
-                            {s.key === 'picked_up' && 'Your food is en route — almost there!'}
-                            {s.key === 'delivered' && 'Enjoy your meal!'}
-                            {s.key === 'received' && 'We have your order — the kitchen will start shortly.'}
-                          </>
-                        )}
-                        {kind === 'dinein' && DINEIN_HINTS[s.key]}
-                        {kind === 'pickup' && PICKUP_HINTS[s.key]}
-                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{hintFor(s)}</p>
                     )}
                   </li>
                 )

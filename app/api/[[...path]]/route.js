@@ -1324,6 +1324,48 @@ Rules:
       })
       const avgDeliveryMin = deliveredCount > 0 ? Math.round(totalDeliveryMs / deliveredCount / 60000) : 0
 
+      // Waiter / service-floor performance — restricted to dine-in orders that
+      // actually went through the waiter dashboard (have served_at). We track:
+      //   • served_count      — total dine-in plates marked served
+      //   • served_today      — same, since 00:00 today
+      //   • avg_pickup_minutes — ready_at → waiter_picked_up_at (how long the
+      //                         plate sat on the pass before a waiter grabbed it)
+      //   • avg_serve_minutes  — waiter_picked_up_at → served_at (walking time)
+      //   • avg_kitchen_to_table_minutes — ready_at → served_at (overall pass
+      //                         to table; the metric guests actually feel)
+      const waiterServed = orders.filter(o =>
+        o.served_at && (o.order_type === 'dine_in' || o.type === 'dine-in' || o.table_id)
+      )
+      let pickMs = 0, pickN = 0
+      let serveMs = 0, serveN = 0
+      let k2tMs = 0, k2tN = 0
+      let servedToday = 0
+      waiterServed.forEach(o => {
+        const served = new Date(o.served_at).getTime()
+        if (o.ready_at && o.waiter_picked_up_at) {
+          pickMs += new Date(o.waiter_picked_up_at).getTime() - new Date(o.ready_at).getTime()
+          pickN++
+        }
+        if (o.waiter_picked_up_at) {
+          serveMs += served - new Date(o.waiter_picked_up_at).getTime()
+          serveN++
+        }
+        if (o.ready_at) {
+          k2tMs += served - new Date(o.ready_at).getTime()
+          k2tN++
+        }
+        if (new Date(o.served_at) >= today) servedToday++
+      })
+      const round1 = (n) => Math.round(n * 10) / 10 // keep 1 decimal — minutes are short
+      const waiterStats = {
+        served_count: waiterServed.length,
+        served_today: servedToday,
+        avg_pickup_minutes: pickN > 0 ? round1(pickMs / pickN / 60000) : 0,
+        avg_serve_minutes: serveN > 0 ? round1(serveMs / serveN / 60000) : 0,
+        avg_kitchen_to_table_minutes: k2tN > 0 ? round1(k2tMs / k2tN / 60000) : 0,
+        sample_size: { pickup: pickN, serve: serveN, kitchen_to_table: k2tN },
+      }
+
       return handleCORS(NextResponse.json({
         total_revenue: +totalRevenue.toFixed(2),
         today_revenue: +todayRevenue.toFixed(2),
@@ -1338,6 +1380,7 @@ Rules:
           avg_delivery_minutes: avgDeliveryMin,
           delivered_count: deliveredCount,
         },
+        waiter: waiterStats,
       }))
     }
 
