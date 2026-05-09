@@ -7,11 +7,11 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { useApp } from '@/lib/AppContext'
-import { Search, Plus, Flame, Leaf, WheatOff, Beef, Star, Clock } from 'lucide-react'
+import { Search, Plus, Flame, Leaf, WheatOff, Beef, Star, Clock, Heart } from 'lucide-react'
 import { toast } from 'sonner'
 
 function MenuPage() {
-  const { t, lang, addToCart, tableId, tableNumber } = useApp()
+  const { t, lang, addToCart, tableId, tableNumber, user, toggleFavorite } = useApp()
   const [dishes, setDishes] = useState([])
   const [categories, setCategories] = useState([])
   const [search, setSearch] = useState('')
@@ -117,6 +117,21 @@ function MenuPage() {
                       {d.dietary_tags?.includes('gluten-free') && <span className="bg-amber-700/90 text-white p-1 rounded-sm"><WheatOff className="h-3 w-3" /></span>}
                       {d.spice_level > 0 && <span className="bg-red-700/90 text-white p-1 rounded-sm"><Flame className="h-3 w-3" /></span>}
                     </div>
+                    {/* Favorite heart — visible to all but only persists for logged-in users */}
+                    <button
+                      type="button"
+                      onClick={async (e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        if (!user) { toast('Log in to save favorites', { description: 'Create an account to keep dishes for later.' }); return }
+                        const res = await toggleFavorite(d.id)
+                        toast.success(res?.favorited ? 'Saved to favorites' : 'Removed from favorites')
+                      }}
+                      aria-label="Toggle favorite"
+                      className="absolute bottom-3 right-3 p-2 rounded-full bg-background/80 backdrop-blur-sm hover:bg-background transition-colors"
+                    >
+                      <Heart className={`h-4 w-4 ${user && (user.favorites || []).includes(d.id) ? 'fill-primary text-primary' : 'text-foreground'}`} />
+                    </button>
                   </div>
                 </Link>
                 <div className="p-5">

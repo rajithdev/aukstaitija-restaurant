@@ -1,13 +1,14 @@
 'use client'
 import Link from 'next/link'
 import { useApp } from '@/lib/AppContext'
-import { ShoppingBag, Sun, Moon, Menu as MenuIcon, X } from 'lucide-react'
+import { ShoppingBag, Sun, Moon, Menu as MenuIcon, X, User, LogOut, ListOrdered } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useState } from 'react'
 
 export default function Navbar() {
-  const { t, lang, setLang, theme, setTheme, cartCount } = useApp()
+  const { t, lang, setLang, theme, setTheme, cartCount, user, logout } = useApp()
   const [open, setOpen] = useState(false)
+  const [accountOpen, setAccountOpen] = useState(false)
 
   const links = [
     { href: '/', label: t('nav.home') },
@@ -15,6 +16,12 @@ export default function Navbar() {
     { href: '/reservations', label: t('nav.reservations') },
     { href: '/track', label: t('nav.track') },
   ]
+
+  const handleLogout = async () => {
+    await logout()
+    setAccountOpen(false)
+    setOpen(false)
+  }
 
   return (
     <header className="sticky top-0 z-50 backdrop-blur-md bg-background/80 border-b border-border">
@@ -45,6 +52,46 @@ export default function Navbar() {
           <Button variant="ghost" size="icon" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label="Toggle theme">
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
+
+          {/* Account dropdown — desktop only */}
+          {user ? (
+            <div className="relative hidden md:block">
+              <Button variant="ghost" size="sm" onClick={() => setAccountOpen(!accountOpen)} className="gap-2" aria-label="Account">
+                <User className="h-4 w-4" />
+                <span className="text-sm font-medium max-w-[120px] truncate">{user.name?.split(' ')[0] || 'Account'}</span>
+              </Button>
+              {accountOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setAccountOpen(false)} />
+                  <div className="absolute right-0 top-full mt-2 w-56 bg-background border border-border rounded-md shadow-lg z-40 py-2">
+                    <div className="px-3 py-2 border-b border-border">
+                      <p className="text-sm font-semibold truncate">{user.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                    </div>
+                    <Link href="/profile" onClick={() => setAccountOpen(false)} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent">
+                      <User className="h-4 w-4" /> Profile
+                    </Link>
+                    <Link href="/orders" onClick={() => setAccountOpen(false)} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent">
+                      <ListOrdered className="h-4 w-4" /> My Orders
+                    </Link>
+                    <button onClick={handleLogout} className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-destructive">
+                      <LogOut className="h-4 w-4" /> Log out
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="hidden md:flex items-center gap-1">
+              <Link href="/login">
+                <Button variant="ghost" size="sm">Log in</Button>
+              </Link>
+              <Link href="/signup">
+                <Button size="sm">Sign up</Button>
+              </Link>
+            </div>
+          )}
+
           <Link href="/cart" className="relative">
             <Button variant="ghost" size="icon" aria-label="Cart">
               <ShoppingBag className="h-4 w-4" />
@@ -69,6 +116,27 @@ export default function Navbar() {
                 {l.label}
               </Link>
             ))}
+            <div className="border-t border-border pt-4 flex flex-col gap-3">
+              {user ? (
+                <>
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground">Signed in as {user.email}</p>
+                  <Link href="/profile" onClick={() => setOpen(false)} className="text-sm font-medium flex items-center gap-2">
+                    <User className="h-4 w-4" /> Profile
+                  </Link>
+                  <Link href="/orders" onClick={() => setOpen(false)} className="text-sm font-medium flex items-center gap-2">
+                    <ListOrdered className="h-4 w-4" /> My Orders
+                  </Link>
+                  <button onClick={handleLogout} className="text-sm font-medium text-left text-destructive flex items-center gap-2">
+                    <LogOut className="h-4 w-4" /> Log out
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Link href="/login" onClick={() => setOpen(false)} className="text-sm font-medium">Log in</Link>
+                  <Link href="/signup" onClick={() => setOpen(false)} className="text-sm font-medium text-primary">Sign up</Link>
+                </>
+              )}
+            </div>
             <button
               onClick={() => setLang(lang === 'en' ? 'lt' : 'en')}
               className="text-left text-xs font-semibold tracking-wider"

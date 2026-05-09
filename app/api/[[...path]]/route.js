@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { NextResponse } from 'next/server'
 import { CATEGORIES, DISHES } from '@/lib/seedData'
 import { createCourierRequest, isValidProvider, PROVIDERS } from '@/lib/deliveryService'
+import { hashPassword, verifyPassword, signSession, readSession, buildSessionCookie, buildClearCookie, publicUser } from '@/lib/auth'
 
 let clientPromise
 
@@ -128,6 +129,18 @@ async function handleRoute(request, { params }) {
   try {
     const db = await connectToMongo()
     await ensureSeeded(db)
+
+    // Resolve the current customer from the HTTP-only session cookie. Returns
+    // null for guests or when the JWT is invalid. Cached on the request scope.
+    let _userCache
+    const currentUser = async () => {
+      if (_userCache !== undefined) return _userCache
+      const session = await readSession(request)
+      if (!session?.uid) { _userCache = null; return null }
+      const user = await db.collection('users').findOne({ id: session.uid })
+      _userCache = user || null
+      return _userCache
+    }
 
     // Health
     if ((route === '/' || route === '/root') && method === 'GET') {
@@ -295,6 +308,7 @@ async function handleRoute(request, { params }) {
       const order = {
         id: uuidv4(),
         order_number: 'AK' + Date.now().toString().slice(-6),
+        user_id: (await currentUser())?.id || null,
         items: body.items,
         type: body.type || (body.table_id ? 'dine-in' : 'pickup'),
         order_type: body.table_id ? 'dine_in' : (body.type === 'delivery' ? 'delivery' : 'pickup'),
@@ -330,6 +344,36 @@ async function handleRoute(request, { params }) {
         updated_at: new Date(),
       }
       await db.collection('orders').insertOne(order)
+
+      // For logged-in customers placing a delivery order, auto-save the address
+      // into their address book so they don't need to retype it next time.
+      if (order.user_id && order.type === 'delivery' && order.address?.address) {
+        const u = await db.collection('users').findOne({ id: order.user_id })
+        if (u) {
+          const list = u.addresses || []
+          const a = order.address
+          const key = `${(a.address || '').toLowerCase().trim()}|${(a.city || '').toLowerCase().trim()}|${(a.zip || '').trim()}`
+          const idx = list.findIndex(x => `${(x.address||'').toLowerCase().trim()}|${(x.city||'').toLowerCase().trim()}|${(x.zip||'').trim()}` === key)
+          const now = new Date()
+          if (idx >= 0) {
+            list[idx].last_used_at = now
+            if (deliveryZone?.id) list[idx].delivery_zone_id = deliveryZone.id
+          } else {
+            list.push({
+              id: uuidv4(),
+              label: 'Home',
+              address: a.address,
+              city: a.city || 'Kaunas',
+              zip: a.zip || '',
+              delivery_zone_id: deliveryZone?.id || null,
+              created_at: now,
+              last_used_at: now,
+            })
+          }
+          await db.collection('users').updateOne({ id: order.user_id }, { $set: { addresses: list, updated_at: now } })
+        }
+      }
+
       return handleCORS(NextResponse.json(stripId(order)))
     }
 
@@ -407,6 +451,7 @@ async function handleRoute(request, { params }) {
       const reservation = {
         id: uuidv4(),
         confirmation: 'RES' + Date.now().toString().slice(-6),
+        user_id: (await currentUser())?.id || null,
         name: body.name,
         phone: body.phone || '',
         email: body.email || '',
@@ -763,6 +808,203 @@ async function handleRoute(request, { params }) {
       }
       await setTableStatus(db, path[1], 'cleaning')
       return handleCORS(NextResponse.json({ ok: true }))
+    }
+
+    // ====================================================================
+    //                     CUSTOMER AUTH (cookie session)
+    // ====================================================================
+
+    // POST /auth/signup  body: { email, password, name, phone? }
+    if (route === '/auth/signup' && method === 'POST') {
+      const body = await request.json()
+      const email = (body.email || '').trim().toLowerCase()
+      const password = body.password || ''
+      const name = (body.name || '').trim()
+      const phone = (body.phone || '').trim()
+
+      if (!email || !password || !name) {
+        return handleCORS(NextResponse.json({ error: 'Name, email and password are required' }, { status: 400 }))
+      }
+      if (!/^\S+@\S+\.\S+$/.test(email)) {
+        return handleCORS(NextResponse.json({ error: 'Please enter a valid email' }, { status: 400 }))
+      }
+      if (password.length < 6) {
+        return handleCORS(NextResponse.json({ error: 'Password must be at least 6 characters' }, { status: 400 }))
+      }
+      const existing = await db.collection('users').findOne({ email })
+      if (existing) {
+        return handleCORS(NextResponse.json({ error: 'An account with this email already exists. Try logging in.' }, { status: 409 }))
+      }
+
+      const user = {
+        id: uuidv4(),
+        email,
+        name,
+        phone,
+        password_hash: await hashPassword(password),
+        addresses: [],
+        favorites: [],
+        created_at: new Date(),
+        updated_at: new Date(),
+      }
+      await db.collection('users').insertOne(user)
+
+      // Auto-link any guest orders/reservations matching this email or phone
+      const orderMatch = { user_id: { $in: [null, undefined] }, $or: [{ 'customer.email': email }] }
+      if (phone) orderMatch.$or.push({ 'customer.phone': phone })
+      const linkedOrders = await db.collection('orders').updateMany(orderMatch, { $set: { user_id: user.id } })
+      const resMatch = { user_id: { $in: [null, undefined] }, $or: [{ email }] }
+      if (phone) resMatch.$or.push({ phone })
+      const linkedRes = await db.collection('reservations').updateMany(resMatch, { $set: { user_id: user.id } })
+
+      const token = await signSession({ uid: user.id, email })
+      const response = NextResponse.json({
+        ok: true,
+        user: publicUser(user),
+        linked_orders: linkedOrders.modifiedCount || 0,
+        linked_reservations: linkedRes.modifiedCount || 0,
+      })
+      response.headers.set('Set-Cookie', buildSessionCookie(token))
+      return handleCORS(response)
+    }
+
+    // POST /auth/login  body: { email, password }
+    if (route === '/auth/login' && method === 'POST') {
+      const body = await request.json()
+      const email = (body.email || '').trim().toLowerCase()
+      const password = body.password || ''
+      if (!email || !password) {
+        return handleCORS(NextResponse.json({ error: 'Email and password are required' }, { status: 400 }))
+      }
+      const user = await db.collection('users').findOne({ email })
+      if (!user || !(await verifyPassword(password, user.password_hash))) {
+        return handleCORS(NextResponse.json({ error: 'Invalid email or password' }, { status: 401 }))
+      }
+      const token = await signSession({ uid: user.id, email })
+      const response = NextResponse.json({ ok: true, user: publicUser(user) })
+      response.headers.set('Set-Cookie', buildSessionCookie(token))
+      return handleCORS(response)
+    }
+
+    // POST /auth/logout — clears the cookie
+    if (route === '/auth/logout' && method === 'POST') {
+      const response = NextResponse.json({ ok: true })
+      response.headers.set('Set-Cookie', buildClearCookie())
+      return handleCORS(response)
+    }
+
+    // GET /auth/me — returns the logged-in user, or 200 with user:null when guest
+    if (route === '/auth/me' && method === 'GET') {
+      const user = await currentUser()
+      return handleCORS(NextResponse.json({ user: publicUser(user) }))
+    }
+
+    // ====================================================================
+    //                       LOGGED-IN USER DATA
+    // ====================================================================
+
+    // PUT /users/me — update profile (name/phone)
+    if (route === '/users/me' && method === 'PUT') {
+      const user = await currentUser()
+      if (!user) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const body = await request.json()
+      const update = { updated_at: new Date() }
+      if (typeof body.name === 'string') update.name = body.name.trim()
+      if (typeof body.phone === 'string') update.phone = body.phone.trim()
+      await db.collection('users').updateOne({ id: user.id }, { $set: update })
+      const fresh = await db.collection('users').findOne({ id: user.id })
+      return handleCORS(NextResponse.json(publicUser(fresh)))
+    }
+
+    // GET /users/me/orders — all orders linked to this user, newest first
+    if (route === '/users/me/orders' && method === 'GET') {
+      const user = await currentUser()
+      if (!user) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const orders = await db.collection('orders').find({ user_id: user.id }).sort({ created_at: -1 }).limit(100).toArray()
+      return handleCORS(NextResponse.json(orders.map(stripId)))
+    }
+
+    // GET /users/me/reservations
+    if (route === '/users/me/reservations' && method === 'GET') {
+      const user = await currentUser()
+      if (!user) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const list = await db.collection('reservations').find({ user_id: user.id }).sort({ date: -1, time: -1 }).limit(50).toArray()
+      return handleCORS(NextResponse.json(list.map(stripId)))
+    }
+
+    // GET /users/me/favorites — returns the dish documents (not just ids)
+    if (route === '/users/me/favorites' && method === 'GET') {
+      const user = await currentUser()
+      if (!user) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const ids = user.favorites || []
+      if (ids.length === 0) return handleCORS(NextResponse.json([]))
+      const dishes = await db.collection('dishes').find({ id: { $in: ids } }).toArray()
+      return handleCORS(NextResponse.json(dishes.map(stripId)))
+    }
+
+    // POST /users/me/favorites  body: { dish_id }  — toggles in/out of favorites
+    if (route === '/users/me/favorites' && method === 'POST') {
+      const user = await currentUser()
+      if (!user) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const { dish_id } = await request.json()
+      if (!dish_id) return handleCORS(NextResponse.json({ error: 'dish_id required' }, { status: 400 }))
+      const has = (user.favorites || []).includes(dish_id)
+      const op = has ? { $pull: { favorites: dish_id } } : { $addToSet: { favorites: dish_id } }
+      await db.collection('users').updateOne({ id: user.id }, op)
+      return handleCORS(NextResponse.json({ ok: true, favorited: !has }))
+    }
+
+    // GET /users/me/addresses
+    if (route === '/users/me/addresses' && method === 'GET') {
+      const user = await currentUser()
+      if (!user) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      return handleCORS(NextResponse.json(user.addresses || []))
+    }
+
+    // POST /users/me/addresses  body: { address, city, zip, label?, delivery_zone_id? }
+    // De-dupes by (address+city+zip) and bumps last_used_at instead of duplicating.
+    if (route === '/users/me/addresses' && method === 'POST') {
+      const user = await currentUser()
+      if (!user) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const body = await request.json()
+      if (!body.address) return handleCORS(NextResponse.json({ error: 'address required' }, { status: 400 }))
+
+      const list = user.addresses || []
+      const key = `${(body.address || '').toLowerCase().trim()}|${(body.city || '').toLowerCase().trim()}|${(body.zip || '').trim()}`
+      const idx = list.findIndex(a => `${(a.address||'').toLowerCase().trim()}|${(a.city||'').toLowerCase().trim()}|${(a.zip||'').trim()}` === key)
+      const now = new Date()
+      let updated
+      if (idx >= 0) {
+        list[idx].last_used_at = now
+        if (body.delivery_zone_id) list[idx].delivery_zone_id = body.delivery_zone_id
+        if (body.label) list[idx].label = body.label
+        updated = list
+      } else {
+        updated = [
+          ...list,
+          {
+            id: uuidv4(),
+            label: body.label || 'Home',
+            address: body.address,
+            city: body.city || 'Kaunas',
+            zip: body.zip || '',
+            delivery_zone_id: body.delivery_zone_id || null,
+            created_at: now,
+            last_used_at: now,
+          },
+        ]
+      }
+      await db.collection('users').updateOne({ id: user.id }, { $set: { addresses: updated, updated_at: now } })
+      return handleCORS(NextResponse.json(updated))
+    }
+
+    // DELETE /users/me/addresses/:id
+    if (path[0] === 'users' && path[1] === 'me' && path[2] === 'addresses' && path.length === 4 && method === 'DELETE') {
+      const user = await currentUser()
+      if (!user) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const updated = (user.addresses || []).filter(a => a.id !== path[3])
+      await db.collection('users').updateOne({ id: user.id }, { $set: { addresses: updated, updated_at: new Date() } })
+      return handleCORS(NextResponse.json(updated))
     }
 
     // ---------------- Admin auth ----------------

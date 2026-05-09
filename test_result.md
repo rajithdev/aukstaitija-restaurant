@@ -442,6 +442,141 @@ backend:
           agent: "testing"
           comment: "✅ PASS - All dual-key lookup scenarios verified (7/7 - 100% success): (1) Order creation generates valid order_number matching ^AK\\d{6}$ regex ✅ (2) GET by UUID returns correct order (backward compatibility) ✅ (3) GET by order_number (exact case) returns correct order ✅ (4) GET by order_number (lowercase) returns correct order (case-insensitive support) ✅ (5) GET by non-existent order_number (AK999999) returns 404 with error:'Not found' ✅ (6) GET by non-existent UUID returns 404 ✅ (7) Regression check: response includes id, order_number, prep_time_total, delivery_status ✅"
 
+  - task: "Customer authentication (POST /auth/signup, /auth/login, /auth/logout, GET /auth/me)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js, lib/auth.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Hybrid customer authentication using HTTP-only cookie session (aukstaitija_session). JWT signed with HS256, 30-day TTL. Signup validates email format, password length (min 6 chars). Login verifies bcrypt password hash. Logout clears cookie with Max-Age=0."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - All auth scenarios verified (10/10 - 100% success): (1) GET /auth/me without session returns {user:null} ✅ (2) Signup validation: missing email returns 400 ✅ (3) Bad email format returns 400 ✅ (4) Password <6 chars returns 400 ✅ (5) Successful signup returns user object with HTTP-only cookie, password_hash NOT leaked ✅ (6) Duplicate email returns 409 ✅ (7) GET /auth/me with session returns user ✅ (8) Login wrong password returns 401 ✅ (9) Login correct credentials sets cookie ✅ (10) Logout clears cookie, subsequent /auth/me returns null ✅"
+
+  - task: "Guest order/reservation auto-linking on signup by email/phone"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "POST /auth/signup auto-links any guest orders/reservations matching the new user's email or phone. Returns linked_orders and linked_reservations counts in signup response."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - Guest linking verified (5/5 - 100% success): (1) Created 2 guest orders with test email/phone ✅ (2) Created 1 guest reservation with same email/phone ✅ (3) Signup with matching email/phone returns linked_orders=2, linked_reservations=1 ✅ (4) GET /users/me/orders includes the 2 linked orders ✅ (5) GET /users/me/reservations includes the linked reservation ✅"
+
+  - task: "User data endpoints (GET /users/me/orders, /reservations, /favorites, /addresses)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "All user data endpoints require authentication (401 without session cookie). GET /users/me/orders returns user's orders sorted newest first. GET /users/me/reservations returns user's reservations. GET /users/me/favorites returns dish objects (not just ids). GET /users/me/addresses returns saved addresses array."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - User data endpoints verified (4/4 - 100% success): (1) GET /users/me/orders without session returns 401 ✅ (2) GET /users/me/reservations without session returns 401 ✅ (3) GET /users/me/favorites without session returns 401 ✅ (4) GET /users/me/addresses without session returns 401 ✅ All endpoints properly protected."
+
+  - task: "Favorites toggle (POST /users/me/favorites)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "POST /users/me/favorites with {dish_id} toggles favorite in/out. Returns {ok:true, favorited:true/false}. GET /users/me/favorites returns full dish objects."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - Favorites toggle verified: Toggle on returns favorited:true ✅ Toggle off returns favorited:false ✅ Toggle back on works ✅ GET /users/me/favorites returns dish object (not just id) ✅"
+
+  - task: "Address management (POST/DELETE /users/me/addresses)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "POST /users/me/addresses adds address with de-duplication by (address+city+zip). Updates last_used_at if duplicate. DELETE /users/me/addresses/:id removes address. Both return updated addresses array."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - Address CRUD verified: POST adds new address ✅ DELETE removes address ✅ Returns updated addresses array ✅"
+
+  - task: "Auto-save address on delivery checkout for logged-in users"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "POST /api/orders with type='delivery' and active session auto-saves address to user.addresses array. De-duplicates by (address+city+zip) and updates last_used_at on repeat use."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - Auto-save address verified (2/2 - 100% success): (1) Delivery order with new address auto-saves to user.addresses with last_used_at ✅ (2) Second order with same address de-duplicates (count unchanged) and updates last_used_at to newer timestamp ✅"
+
+  - task: "Order creation links to user_id when logged in"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "POST /api/orders sets user_id from session cookie when logged in. Remains null for guest orders (no session)."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - User linking verified (2/2 - 100% success): (1) Order with active session sets user_id to logged-in user ✅ (2) Order without session sets user_id=null (anonymous guest order) ✅"
+
+  - task: "User profile update (PUT /users/me)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "PUT /users/me updates name/phone. Requires auth. Returns updated user object. GET /auth/me reflects changes."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - Profile update verified: PUT updates name and phone ✅ GET /auth/me reflects changes ✅"
+
+  - task: "Authentication regression checks (admin login, order lookup, delivery fields)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Verify no regressions: admin login still works, order lookup by UUID/order_number works, delivery orders include prep_time_total and delivery_status."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - All regressions verified (3/3 - 100% success): (1) Admin login with password 'admin123' returns token ✅ (2) Order lookup by UUID and order_number both work ✅ (3) Delivery order includes prep_time_total=25 and delivery_status='pending' ✅ No regressions detected."
+
 frontend:
   - task: "Customer pages (home, menu, dish detail, cart, checkout, reservations, order tracking, admin)"
     implemented: true
@@ -458,7 +593,7 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 4
+  test_sequence: 5
   run_ui: false
 
 test_plan:
@@ -774,3 +909,73 @@ agent_communication:
       
       Dual-key order lookup feature implemented correctly and production-ready.
       No issues found. Backend is stable.
+
+  - agent: "testing"
+    message: |
+      ✅ HYBRID CUSTOMER AUTHENTICATION TESTS - ALL PASSED (29/29 - 100% success rate)
+      
+      Test Run 6 - Hybrid Customer Authentication System:
+      
+      **NEW FEATURES TESTED:**
+      
+      1. Auth basics (10 tests):
+         - GET /auth/me without session returns {user:null} ✅
+         - Signup validation: missing email → 400 ✅
+         - Signup validation: bad email format → 400 ✅
+         - Signup validation: password <6 chars → 400 ✅
+         - Successful signup: returns user object, HTTP-only cookie set, password_hash NOT leaked ✅
+         - Duplicate email → 409 with 'existing' error ✅
+         - GET /auth/me with session returns user ✅
+         - Login wrong password → 401 ✅
+         - Login correct credentials → 200, sets cookie ✅
+         - Logout clears cookie (Max-Age=0), subsequent /auth/me returns null ✅
+      
+      2. Guest order linking on signup (5 tests):
+         - Pre-created 2 guest orders with test email/phone ✅
+         - Pre-created 1 guest reservation with same email/phone ✅
+         - Signup with matching email/phone returns linked_orders=2, linked_reservations=1 ✅
+         - GET /users/me/orders includes the 2 linked orders ✅
+         - GET /users/me/reservations includes the linked reservation ✅
+      
+      3. Logged-in order creation (2 tests):
+         - Order with active session sets user_id to logged-in user ✅
+         - Order without session sets user_id=null (anonymous guest) ✅
+      
+      4. Auto-save address on delivery checkout (2 tests):
+         - Delivery order with new address auto-saves to user.addresses ✅
+         - Second order with same address de-duplicates (count unchanged) and updates last_used_at ✅
+      
+      5. User data endpoints auth required (4 tests):
+         - GET /users/me/orders without session → 401 ✅
+         - GET /users/me/reservations without session → 401 ✅
+         - GET /users/me/favorites without session → 401 ✅
+         - GET /users/me/addresses without session → 401 ✅
+      
+      6. Favorites toggle (1 test):
+         - Toggle on/off/on works, GET returns dish object (not just id) ✅
+      
+      7. Address CRUD (1 test):
+         - POST adds address, DELETE removes address ✅
+      
+      8. Profile update (1 test):
+         - PUT /users/me updates name/phone, GET /auth/me reflects changes ✅
+      
+      9. Regression checks (3 tests):
+         - Admin login with password 'admin123' returns token ✅
+         - Order lookup by UUID and order_number both work ✅
+         - Delivery order includes prep_time_total=25 and delivery_status='pending' ✅
+      
+      **CRITICAL VERIFICATION:**
+      - ✅ HTTP-only cookie session (aukstaitija_session) working correctly
+      - ✅ Cookie attributes: HttpOnly, SameSite=Lax, Path=/, Max-Age=2592000 (30 days)
+      - ✅ JWT signed with HS256, 30-day TTL
+      - ✅ password_hash never leaked in responses
+      - ✅ Guest order/reservation auto-linking by email OR phone
+      - ✅ Address de-duplication by (address+city+zip)
+      - ✅ last_used_at timestamp updates on repeat address use
+      - ✅ All user data endpoints properly protected (401 without session)
+      - ✅ Order creation links to user_id when logged in, null for guests
+      - ✅ NO REGRESSIONS: Admin login, order lookup, delivery fields all working
+      
+      All hybrid customer authentication features implemented correctly and production-ready.
+      No issues found. Backend is stable and complete.

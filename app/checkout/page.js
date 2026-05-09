@@ -20,7 +20,7 @@ const PROVIDERS = [
 function CheckoutInner() {
   const router = useRouter()
   const params = useSearchParams()
-  const { t, lang, cart, cartSubtotal, clearCart, tableId, tableNumber, setTableId, hydrated } = useApp()
+  const { t, lang, cart, cartSubtotal, clearCart, tableId, tableNumber, setTableId, hydrated, user } = useApp()
   const [type, setType] = useState(tableId ? 'dine-in' : 'pickup')
   const [form, setForm] = useState({ name: '', phone: '', email: '', address: '', city: 'Kaunas', zip: '' })
   const [notes, setNotes] = useState('')
@@ -30,6 +30,8 @@ function CheckoutInner() {
   const [zones, setZones] = useState([])
   const [zoneId, setZoneId] = useState('')
   const [provider, setProvider] = useState('in_house')
+  const [savedAddresses, setSavedAddresses] = useState([])
+  const [selectedAddressId, setSelectedAddressId] = useState('new')
 
   const discount = parseFloat(params.get('discount') || '0')
   const coupon = params.get('coupon') || ''
@@ -53,6 +55,47 @@ function CheckoutInner() {
     })
   }, [])
 
+  // Auto-fill the form from the logged-in user (only for non-dine-in flows so we
+  // never accidentally lock the QR diner into using their account contact info).
+  useEffect(() => {
+    if (!user || tableId) return
+    setForm(f => ({
+      ...f,
+      name: f.name || user.name || '',
+      phone: f.phone || user.phone || '',
+      email: f.email || user.email || '',
+    }))
+    // Pull saved addresses for the dropdown
+    fetch('/api/users/me/addresses', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : [])
+      .then(list => {
+        setSavedAddresses(list)
+        // Auto-pick the most recent address when nothing is set yet
+        if (list.length > 0) {
+          const mostRecent = [...list].sort((a, b) =>
+            new Date(b.last_used_at || b.created_at || 0).getTime() -
+            new Date(a.last_used_at || a.created_at || 0).getTime()
+          )[0]
+          setSelectedAddressId(mostRecent.id)
+          setForm(f => (f.address ? f : { ...f, address: mostRecent.address, city: mostRecent.city || 'Kaunas', zip: mostRecent.zip || '' }))
+          if (mostRecent.delivery_zone_id) setZoneId(mostRecent.delivery_zone_id)
+        }
+      })
+  }, [user, tableId])
+
+  // When user picks a saved address from the dropdown, copy fields into the form
+  const applySavedAddress = (id) => {
+    setSelectedAddressId(id)
+    if (id === 'new') {
+      setForm(f => ({ ...f, address: '', city: 'Kaunas', zip: '' }))
+      return
+    }
+    const a = savedAddresses.find(x => x.id === id)
+    if (!a) return
+    setForm(f => ({ ...f, address: a.address, city: a.city || 'Kaunas', zip: a.zip || '' }))
+    if (a.delivery_zone_id) setZoneId(a.delivery_zone_id)
+  }
+
   // Auto-detect zone from postal code
   useEffect(() => {
     if (!form.zip || zones.length === 0) return
@@ -70,6 +113,7 @@ function CheckoutInner() {
     try {
       const res = await fetch('/api/orders', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           items: cart,
@@ -113,6 +157,23 @@ function CheckoutInner() {
         )}
         <form onSubmit={submit} className="grid lg:grid-cols-3 gap-10">
           <div className="lg:col-span-2 space-y-6">
+            {/* Guest login banner — shown only to non-logged-in customers, never on QR dine-in */}
+            {!user && !tableId && (
+              <Card className="p-4 border-primary/30 bg-primary/5 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                <div className="flex-1">
+                  <p className="text-sm font-semibold">Have an account?</p>
+                  <p className="text-xs text-muted-foreground">Log in to auto-fill your details and link this order to your history. You can also continue as a guest below.</p>
+                </div>
+                <div className="flex gap-2">
+                  <a href="/login?next=/checkout"><Button variant="outline" size="sm" type="button">Log in</Button></a>
+                  <a href="/signup?next=/checkout"><Button size="sm" type="button">Sign up</Button></a>
+                </div>
+              </Card>
+            )}
+            {user && !tableId && (
+              <p className="text-xs text-muted-foreground">Signed in as <strong>{user.email}</strong> — your details have been pre-filled.</p>
+            )}
+
             {/* Type */}
             {!tableId && (
             <Card className="p-6 bg-card">
@@ -141,7 +202,24 @@ function CheckoutInner() {
               <div className="sm:col-span-2"><Label>{t('checkout.email')}</Label><Input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
               {type === 'delivery' && (
                 <>
-                  <div className="sm:col-span-2"><Label>{t('checkout.address')} *</Label><Input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder="Vilniaus g. 24, apt 5" /></div>
+                  {user && savedAddresses.length > 0 && (
+                    <div className="sm:col-span-2">
+                      <Label>Saved addresses</Label>
+                      <select
+                        value={selectedAddressId}
+                        onChange={e => applySavedAddress(e.target.value)}
+                        className="w-full mt-1 h-10 px-3 bg-background border border-border rounded-md text-sm"
+                      >
+                        {savedAddresses.map(a => (
+                          <option key={a.id} value={a.id}>
+                            {a.label || 'Home'} — {a.address}{a.city ? `, ${a.city}` : ''}
+                          </option>
+                        ))}
+                        <option value="new">+ Use a new address</option>
+                      </select>
+                    </div>
+                  )}
+                  <div className="sm:col-span-2"><Label>{t('checkout.address')} *</Label><Input value={form.address} onChange={e => { setForm({ ...form, address: e.target.value }); setSelectedAddressId('new') }} placeholder="Vilniaus g. 24, apt 5" /></div>
                   <div><Label>{t('checkout.city')}</Label><Input value={form.city} onChange={e => setForm({ ...form, city: e.target.value })} /></div>
                   <div><Label>{t('checkout.zip')}</Label><Input value={form.zip} onChange={e => setForm({ ...form, zip: e.target.value })} placeholder="44280" /></div>
                 </>
