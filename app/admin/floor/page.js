@@ -97,6 +97,7 @@ function FloorPage() {
             <h1 className="font-serif text-2xl">Floor Map</h1>
           </div>
           <div className="flex gap-2">
+            <Link href="/admin/qr-sheet"><Button variant="outline"><QrCode className="h-4 w-4 mr-1" /> Print all QR codes</Button></Link>
             <Button variant="outline" onClick={load}><RefreshCcw className="h-4 w-4 mr-1" /> Refresh</Button>
             <Link href="/kitchen"><Button variant="outline">Kitchen</Button></Link>
           </div>
