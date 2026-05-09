@@ -577,6 +577,63 @@ backend:
           agent: "testing"
           comment: "✅ PASS - All regressions verified (3/3 - 100% success): (1) Admin login with password 'admin123' returns token ✅ (2) Order lookup by UUID and order_number both work ✅ (3) Delivery order includes prep_time_total=25 and delivery_status='pending' ✅ No regressions detected."
 
+  - task: "Premium KDS redesign of /kitchen page"
+    implemented: true
+    working: "NA"
+    file: "app/kitchen/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Full visual redesign of /kitchen into a premium luxury Kitchen Display
+            System (KDS). All existing backend wiring preserved (kitchen/orders, dispatch,
+            picked-up, served, priority toggle).
+
+            Layout
+              - Locked dark mode (radial gold-tinted black background) regardless of theme.
+              - Left sidebar (260px): Aukštaitija logo + "Kitchen" title; nav items
+                Orders / Incoming / Cooking / Ready / Completed / Settings, each with
+                live count badge. Active item has gold glow ring.
+              - Top bar: centered live clock + animated green "Live" pill, order-type
+                filter dropdown, sound toggle, Exit button.
+              - Main board: 3 glassmorphic columns (Incoming gold / Cooking blue /
+                Ready emerald). Sidebar nav switches between full board, single-column
+                focused view, Completed (last 24h) grid, or Settings panel.
+              - Bottom analytics strip: Today's orders, In progress, Ready, Avg prep time.
+
+            Order cards
+              - Order ID (#AK123456), type pill, table pill, provider pill, priority pill.
+              - Item list with monospace amber quantity column.
+              - Special-request highlight box.
+              - Predictive courier dispatch info preserved (delivery only).
+              - Per-state CTA buttons:
+                  Incoming: gold "Accept & Start" + secondary "Reject" + priority flame.
+                  Cooking : blue "Mark Ready" (+ "Call Courier" for delivery).
+                  Ready   : delivery → "Mark Picked Up" / "Dispatch Courier";
+                            dine-in  → gold "Notify Waiter" + secondary "Served";
+                            pickup   → emerald "Hand Over".
+              - Urgency: >15min amber 1px ring, >25min red 2px pulsing ring.
+              - Hover lift + neon edge glow.
+
+            New UX
+              - "Reject" button on incoming → status='cancelled' (with confirm).
+              - "Notify Waiter" plays a chime + toasts (waiter dashboard already polls
+                at 4s so no backend change needed).
+              - "Served" calls existing POST /orders/:id/served.
+              - Completed view fetches GET /api/orders?status=delivered (admin) and
+                shows last 24h with prep-time per order.
+              - Avg prep time computed client-side from orders that have both
+                accepted_at and ready_at timestamps.
+
+            Notes
+              - DispatchModal still used for delivery courier flows.
+              - Sound chime variants: 2-tone descending for new orders, 2-tone
+                ascending for waiter notifications.
+              - All polling cadences preserved (4s active, 15s analytics/completed).
+
   - task: "Waiter activity analytics in /api/admin/analytics"
     implemented: true
     working: true
