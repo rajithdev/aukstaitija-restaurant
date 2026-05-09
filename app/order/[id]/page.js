@@ -6,10 +6,47 @@ import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
 import { Card } from '@/components/ui/card'
 import { useApp } from '@/lib/AppContext'
-import { CheckCircle2, ChefHat, Clock, Truck, PackageCheck, Circle } from 'lucide-react'
+import { CheckCircle2, ChefHat, Clock, Truck, PackageCheck, Bike, Map } from 'lucide-react'
 
-const STAGES = ['received', 'preparing', 'ready', 'out', 'delivered']
-const ICONS = { received: Clock, preparing: ChefHat, ready: PackageCheck, out: Truck, delivered: CheckCircle2 }
+const STAGES_DELIVERY = [
+  { key: 'received', label: 'Order received', icon: Clock },
+  { key: 'preparing', label: 'Preparing', icon: ChefHat },
+  { key: 'ready', label: 'Ready for courier', icon: PackageCheck },
+  { key: 'courier_assigned', label: 'Courier assigned', icon: Bike },
+  { key: 'on_the_way', label: 'On the way', icon: Truck },
+  { key: 'delivered', label: 'Delivered', icon: CheckCircle2 },
+]
+
+const STAGES_NON_DELIVERY = [
+  { key: 'received', label: 'Order received', icon: Clock },
+  { key: 'preparing', label: 'Preparing', icon: ChefHat },
+  { key: 'ready', label: 'Ready', icon: PackageCheck },
+  { key: 'delivered', label: 'Completed', icon: CheckCircle2 },
+]
+
+const PROVIDER_BADGE = {
+  in_house: { label: 'In-house Courier', color: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' },
+  wolt: { label: 'Wolt', color: 'bg-sky-500/15 text-sky-700 dark:text-sky-300' },
+  bolt_food: { label: 'Bolt Food', color: 'bg-emerald-400/15 text-emerald-700 dark:text-emerald-300' },
+}
+
+function progressIndex(order, stages) {
+  if (order.status === 'cancelled') return -1
+  if (order.type === 'delivery') {
+    const dStatus = order.delivery_status
+    if (order.status === 'delivered' || dStatus === 'delivered') return stages.length - 1
+    if (dStatus === 'on_the_way') return 4
+    if (dStatus === 'courier_assigned') return 3
+    if (order.status === 'ready') return 2
+    if (order.status === 'preparing') return 1
+    return 0
+  } else {
+    if (order.status === 'delivered') return stages.length - 1
+    if (order.status === 'ready') return 2
+    if (order.status === 'preparing') return 1
+    return 0
+  }
+}
 
 function OrderTrack() {
   const params = useParams()
@@ -35,8 +72,11 @@ function OrderTrack() {
   )
   if (!order) return <div className="min-h-screen bg-background"><Navbar /></div>
 
-  const filteredStages = order.type === 'delivery' ? STAGES : STAGES.filter(s => s !== 'out')
-  const currentIdx = filteredStages.indexOf(order.status === 'cancelled' ? 'received' : order.status)
+  const isDelivery = order.type === 'delivery'
+  const stages = isDelivery ? STAGES_DELIVERY : STAGES_NON_DELIVERY
+  const currentIdx = progressIndex(order, stages)
+  const providerBadge = isDelivery ? PROVIDER_BADGE[order.delivery_method || order.delivery_provider || 'in_house'] : null
+  const headlineLabel = currentIdx >= 0 ? stages[currentIdx].label : 'Cancelled'
 
   return (
     <div className="min-h-screen bg-background">
@@ -45,29 +85,57 @@ function OrderTrack() {
         <div className="max-w-3xl mx-auto">
           <div className="text-center mb-10">
             <p className="text-primary text-xs uppercase tracking-[0.4em] mb-3">Order #{order.order_number}</p>
-            <h1 className="font-serif text-5xl mb-3">{t(`status.${order.status}`)}</h1>
-            <p className="text-muted-foreground">Estimated time: {order.items.reduce((m, i) => Math.max(m, 30), 30)} minutes</p>
+            <h1 className="font-serif text-5xl mb-3">{headlineLabel}</h1>
+            {isDelivery && providerBadge && (
+              <div className="inline-flex items-center gap-2 mt-1">
+                <span className={`text-xs uppercase tracking-wider px-3 py-1 rounded-full ${providerBadge.color}`}>
+                  <Bike className="h-3 w-3 inline mr-1" /> {providerBadge.label}
+                </span>
+                {order.courier_eta && <span className="text-xs text-muted-foreground">~{order.courier_eta} min ETA</span>}
+                {order.delivery_zone_name && <span className="text-xs text-muted-foreground">· {order.delivery_zone_name}</span>}
+              </div>
+            )}
           </div>
 
-          {/* Progress */}
+          {/* Vertical timeline */}
           <Card className="p-8 mb-6 bg-card">
-            <div className="flex items-center justify-between">
-              {filteredStages.map((s, i) => {
-                const Icon = ICONS[s]
-                const active = i <= currentIdx
+            <ol className="relative border-l-2 border-border ml-3 space-y-6">
+              {stages.map((s, i) => {
+                const Icon = s.icon
+                const reached = i <= currentIdx
                 const isCurrent = i === currentIdx
                 return (
-                  <div key={s} className="flex-1 flex flex-col items-center relative">
-                    {i > 0 && <div className={`absolute right-1/2 top-5 h-px w-full ${active ? 'bg-primary' : 'bg-border'}`} />}
-                    <div className={`relative w-10 h-10 rounded-full flex items-center justify-center z-10 ${active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'} ${isCurrent ? 'ring-4 ring-primary/30 animate-pulse' : ''}`}>
-                      <Icon className="h-4 w-4" />
+                  <li key={s.key} className="ml-6">
+                    <div className={`absolute -left-3 w-6 h-6 rounded-full flex items-center justify-center ${reached ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'} ${isCurrent ? 'ring-4 ring-primary/30 animate-pulse' : ''}`}>
+                      <Icon className="h-3 w-3" />
                     </div>
-                    <p className={`mt-2 text-[10px] uppercase tracking-wider text-center ${active ? 'text-foreground' : 'text-muted-foreground'}`}>{t(`status.${s}`)}</p>
-                  </div>
+                    <p className={`text-sm font-medium ${reached ? 'text-foreground' : 'text-muted-foreground'}`}>{s.label}</p>
+                    {isCurrent && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {s.key === 'preparing' && 'Our kitchen is preparing your order…'}
+                        {s.key === 'ready' && (isDelivery ? 'Waiting for the courier' : 'Pickup ready when you arrive')}
+                        {s.key === 'courier_assigned' && `${providerBadge?.label || 'Courier'} is on the way to pick up your food`}
+                        {s.key === 'on_the_way' && 'Your food is en route — almost there!'}
+                        {s.key === 'delivered' && 'Enjoy your meal!'}
+                      </p>
+                    )}
+                  </li>
                 )
               })}
-            </div>
+            </ol>
           </Card>
+
+          {/* Courier tracking link */}
+          {isDelivery && order.courier_tracking_url && (
+            <a href={order.courier_tracking_url} target="_blank" rel="noreferrer" className="block">
+              <Card className="p-4 mb-6 bg-card border-primary/40 hover:bg-accent/30 transition">
+                <div className="flex items-center gap-3">
+                  <Map className="h-5 w-5 text-primary" />
+                  <span className="text-sm">Track courier in {providerBadge?.label}</span>
+                </div>
+              </Card>
+            </a>
+          )}
 
           {/* Items */}
           <Card className="p-6 bg-card">

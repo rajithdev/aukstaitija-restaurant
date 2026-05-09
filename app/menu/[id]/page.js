@@ -7,7 +7,7 @@ import Footer from '@/components/Footer'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { useApp } from '@/lib/AppContext'
-import { Plus, Minus, Heart, ArrowLeft, Flame, Leaf, WheatOff, Clock, ChefHat } from 'lucide-react'
+import { Plus, Minus, Heart, ArrowLeft, Flame, Leaf, WheatOff, Clock, ChefHat, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 
 function DishDetail() {
@@ -18,6 +18,8 @@ function DishDetail() {
   const [qty, setQty] = useState(1)
   const [notes, setNotes] = useState('')
   const [favorite, setFavorite] = useState(false)
+  const [recs, setRecs] = useState([])
+  const [recsLoading, setRecsLoading] = useState(true)
 
   useEffect(() => {
     fetch(`/api/dishes/${params.id}`).then(r => r.json()).then(d => {
@@ -27,6 +29,26 @@ function DishDetail() {
         setFavorite(favs.includes(params.id))
       } catch {}
     })
+    // Track in browsing history
+    try {
+      const hist = JSON.parse(localStorage.getItem('aukstaitija_history') || '[]')
+      const next = [params.id, ...hist.filter(h => h !== params.id)].slice(0, 10)
+      localStorage.setItem('aukstaitija_history', JSON.stringify(next))
+    } catch {}
+
+    // Fetch AI recommendations
+    setRecsLoading(true)
+    let favs = []
+    let history = []
+    try {
+      favs = JSON.parse(localStorage.getItem('aukstaitija_favs') || '[]')
+      history = JSON.parse(localStorage.getItem('aukstaitija_history') || '[]')
+    } catch {}
+    fetch('/api/recommend', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dish_id: params.id, favorites: favs, history, limit: 3 })
+    }).then(r => r.json()).then(d => { setRecs(d.picks || []); setRecsLoading(false) })
+      .catch(() => setRecsLoading(false))
   }, [params.id])
 
   const toggleFavorite = () => {
@@ -118,6 +140,44 @@ function DishDetail() {
             </div>
           </div>
         </div>
+
+        {/* AI Recommendations */}
+        <section className="mt-24 pt-12 border-t border-border">
+          <div className="flex items-center gap-3 mb-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <p className="text-primary text-xs uppercase tracking-[0.4em]">Sommelier's pairing</p>
+          </div>
+          <h2 className="font-serif text-4xl mb-8">You might also like</h2>
+          {recsLoading ? (
+            <div className="grid sm:grid-cols-3 gap-6">
+              {[...Array(3)].map((_, i) => <div key={i} className="aspect-[4/5] rounded-sm bg-muted shimmer" />)}
+            </div>
+          ) : recs.length === 0 ? (
+            <p className="text-muted-foreground">No suggestions available.</p>
+          ) : (
+            <div className="grid sm:grid-cols-3 gap-6">
+              {recs.map(r => (
+                <Card key={r.id} className="group overflow-hidden bg-card border-border hover:luxury-shadow transition-all duration-500">
+                  <Link href={`/menu/${r.id}`}>
+                    <div className="aspect-[4/3] overflow-hidden">
+                      <img src={r.image_url} alt={r.name} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+                    </div>
+                  </Link>
+                  <div className="p-5">
+                    <Link href={`/menu/${r.id}`}>
+                      <h3 className="font-serif text-2xl mb-2 group-hover:text-primary transition-colors">{lang === 'lt' ? r.name_lt : r.name}</h3>
+                    </Link>
+                    <p className="text-sm italic text-muted-foreground mb-4 leading-relaxed min-h-[3.5rem]">"{r.reason}"</p>
+                    <div className="flex items-center justify-between">
+                      <span className="font-serif text-2xl text-primary">€{r.price.toFixed(2)}</span>
+                      <Button size="sm" onClick={() => { addToCart(r, 1); toast.success('Added to cart') }}><Plus className="h-3 w-3" /> Add</Button>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
       <Footer />
     </div>

@@ -8,34 +8,59 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useApp } from '@/lib/AppContext'
-import { Truck, ShoppingBag, Utensils, Banknote, CreditCard } from 'lucide-react'
+import { Truck, ShoppingBag, Utensils, Banknote, CreditCard, MapPin, Bike, Clock, Check } from 'lucide-react'
 import { toast } from 'sonner'
+
+const PROVIDERS = [
+  { id: 'in_house', label: 'In-house Courier', sub: 'Our own riders, fastest for Kaunas centre', color: 'border-emerald-500 bg-emerald-500/10' },
+  { id: 'wolt', label: 'Wolt', sub: 'We hand over your order to a Wolt courier', color: 'border-sky-500 bg-sky-500/10' },
+  { id: 'bolt_food', label: 'Bolt Food', sub: 'We hand over your order to a Bolt Food courier', color: 'border-emerald-400 bg-emerald-400/10' },
+]
 
 function CheckoutInner() {
   const router = useRouter()
   const params = useSearchParams()
-  const { t, lang, cart, cartSubtotal, clearCart, tableId, tableNumber, setTableId } = useApp()
+  const { t, lang, cart, cartSubtotal, clearCart, tableId, tableNumber, setTableId, hydrated } = useApp()
   const [type, setType] = useState(tableId ? 'dine-in' : 'pickup')
   const [form, setForm] = useState({ name: '', phone: '', email: '', address: '', city: 'Kaunas', zip: '' })
   const [notes, setNotes] = useState('')
   const [payment, setPayment] = useState('cash')
   const [submitting, setSubmitting] = useState(false)
+  const [zones, setZones] = useState([])
+  const [zoneId, setZoneId] = useState('')
+  const [provider, setProvider] = useState('in_house')
 
   const discount = parseFloat(params.get('discount') || '0')
   const coupon = params.get('coupon') || ''
 
   const tax = +(cartSubtotal * 0.21).toFixed(2)
-  const deliveryFee = type === 'delivery' ? 3.50 : 0
+  const selectedZone = zones.find(z => z.id === zoneId)
+  const deliveryFee = type === 'delivery' ? (selectedZone?.fee ?? 3.50) : 0
   const total = +(cartSubtotal + tax + deliveryFee - discount).toFixed(2)
 
-  useEffect(() => { if (cart.length === 0) router.push('/menu') }, [cart, router])
+  useEffect(() => { if (hydrated && cart.length === 0) router.push('/menu') }, [cart, router, hydrated])
   useEffect(() => { if (tableId) setType('dine-in') }, [tableId])
+  useEffect(() => {
+    fetch('/api/delivery-zones').then(r => r.json()).then(d => {
+      const arr = Array.isArray(d) ? d : []
+      setZones(arr)
+      if (arr.length > 0 && !zoneId) setZoneId(arr[0].id)
+    })
+  }, [])
+
+  // Auto-detect zone from postal code
+  useEffect(() => {
+    if (!form.zip || zones.length === 0) return
+    const match = zones.find(z => (z.postal_codes || []).includes(form.zip))
+    if (match) setZoneId(match.id)
+  }, [form.zip, zones])
 
   const submit = async (e) => {
     e.preventDefault()
     if (!form.name) { toast.error('Name is required'); return }
     if (!tableId && !form.phone) { toast.error('Phone is required'); return }
     if (type === 'delivery' && !form.address) { toast.error('Address required for delivery'); return }
+    if (type === 'delivery' && !zoneId) { toast.error('Please select a delivery zone'); return }
     setSubmitting(true)
     try {
       const res = await fetch('/api/orders', {
@@ -47,6 +72,8 @@ function CheckoutInner() {
           table_id: tableId || null,
           customer: { name: form.name, phone: form.phone, email: form.email },
           address: type === 'delivery' ? { address: form.address, city: form.city, zip: form.zip } : null,
+          delivery_method: type === 'delivery' ? provider : null,
+          delivery_zone_id: type === 'delivery' ? zoneId : null,
           notes,
           payment_method: payment,
           discount,
@@ -107,10 +134,45 @@ function CheckoutInner() {
                 <>
                   <div className="sm:col-span-2"><Label>{t('checkout.address')} *</Label><Input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder="Vilniaus g. 24, apt 5" /></div>
                   <div><Label>{t('checkout.city')}</Label><Input value={form.city} onChange={e => setForm({ ...form, city: e.target.value })} /></div>
-                  <div><Label>{t('checkout.zip')}</Label><Input value={form.zip} onChange={e => setForm({ ...form, zip: e.target.value })} /></div>
+                  <div><Label>{t('checkout.zip')}</Label><Input value={form.zip} onChange={e => setForm({ ...form, zip: e.target.value })} placeholder="44280" /></div>
                 </>
               )}
             </Card>
+
+            {/* Delivery zone & provider */}
+            {type === 'delivery' && !tableId && (
+              <Card className="p-6 bg-card">
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-2"><MapPin className="h-3 w-3" /> Delivery zone</Label>
+                <div className="grid sm:grid-cols-3 gap-3 mt-3">
+                  {zones.map(z => (
+                    <button key={z.id} type="button" onClick={() => setZoneId(z.id)}
+                      className={`p-4 rounded-md border text-left transition ${zoneId === z.id ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent/30'}`}>
+                      <div className="flex items-baseline justify-between mb-1">
+                        <span className="font-serif text-lg">{z.name}</span>
+                        <span className="font-serif text-xl text-primary">€{z.fee.toFixed(2)}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> ~{z.eta_minutes} min</p>
+                    </button>
+                  ))}
+                </div>
+                {zones.length === 0 && <p className="text-sm text-muted-foreground mt-3">No active delivery zones.</p>}
+
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-2 mt-6"><Bike className="h-3 w-3" /> Courier service</Label>
+                <p className="text-xs text-muted-foreground mt-1 mb-3">Choose how we'll get your food to you. We handle pickup & quality, the courier handles the ride.</p>
+                <div className="grid sm:grid-cols-3 gap-3">
+                  {PROVIDERS.map(p => (
+                    <button key={p.id} type="button" onClick={() => setProvider(p.id)}
+                      className={`p-4 rounded-md border text-left transition ${provider === p.id ? p.color + ' border-2' : 'border-border hover:bg-accent/30'}`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium">{p.label}</span>
+                        {provider === p.id && <Check className="h-4 w-4 text-primary" />}
+                      </div>
+                      <p className="text-[11px] text-muted-foreground leading-snug">{p.sub}</p>
+                    </button>
+                  ))}
+                </div>
+              </Card>
+            )}
 
             {/* Notes */}
             <Card className="p-6 bg-card">

@@ -2,6 +2,7 @@ import { MongoClient } from 'mongodb'
 import { v4 as uuidv4 } from 'uuid'
 import { NextResponse } from 'next/server'
 import { CATEGORIES, DISHES } from '@/lib/seedData'
+import { createCourierRequest, isValidProvider, PROVIDERS } from '@/lib/deliveryService'
 
 let clientPromise
 
@@ -57,6 +58,16 @@ async function ensureSeeded(db) {
       { id: 't10', number: 10, capacity: 8, status: 'available', section: 'Private Room', x: 3, y: 2 },
     ]
     await db.collection('tables').insertMany(TABLES)
+  }
+
+  // Delivery zones — seed 3 default Kaunas zones if empty
+  const zonesCount = await db.collection('delivery_zones').countDocuments()
+  if (zonesCount === 0) {
+    await db.collection('delivery_zones').insertMany([
+      { id: uuidv4(), name: 'Centras', name_lt: 'Kauno centras', fee: 2.50, eta_minutes: 25, postal_codes: ['44280', '44281', '44282', '44283', '44290'], active: true },
+      { id: uuidv4(), name: 'Žaliakalnis', name_lt: 'Žaliakalnis', fee: 3.50, eta_minutes: 35, postal_codes: ['44300', '44301', '44302', '44303'], active: true },
+      { id: uuidv4(), name: 'Šilainiai', name_lt: 'Šilainiai', fee: 4.50, eta_minutes: 45, postal_codes: ['46249', '46250', '46251', '46252'], active: true },
+    ])
   }
 }
 
@@ -220,7 +231,23 @@ async function handleRoute(request, { params }) {
       }
       const subtotal = body.items.reduce((s, i) => s + (parseFloat(i.price) * parseInt(i.quantity)), 0)
       const tax = +(subtotal * 0.21).toFixed(2) // 21% VAT Lithuania
-      const deliveryFee = body.type === 'delivery' ? (body.deliveryFee || 3.50) : 0
+
+      // Delivery zone & fee
+      let deliveryZone = null
+      let deliveryFee = 0
+      let courierEta = null
+      if (body.type === 'delivery') {
+        if (body.delivery_zone_id) {
+          deliveryZone = await db.collection('delivery_zones').findOne({ id: body.delivery_zone_id })
+          if (!deliveryZone) {
+            return handleCORS(NextResponse.json({ error: 'Invalid delivery zone' }, { status: 400 }))
+          }
+          deliveryFee = parseFloat(deliveryZone.fee) || 0
+          courierEta = deliveryZone.eta_minutes
+        } else {
+          deliveryFee = body.deliveryFee || 3.50
+        }
+      }
       const discount = body.discount || 0
       const total = +(subtotal + tax + deliveryFee - discount).toFixed(2)
 
@@ -261,6 +288,17 @@ async function handleRoute(request, { params }) {
         session_id: sessionId,
         customer: body.customer || {},
         address: body.address || null,
+        // Delivery fields
+        delivery_method: body.type === 'delivery' ? (body.delivery_method || 'in_house') : null,
+        delivery_provider: body.type === 'delivery' ? (body.delivery_method || 'in_house') : null,
+        delivery_status: body.type === 'delivery' ? 'pending' : null,
+        delivery_zone_id: deliveryZone?.id || null,
+        delivery_zone_name: deliveryZone?.name || null,
+        courier_eta: courierEta,
+        courier_tracking_url: null,
+        courier_reference_id: null,
+        courier_assigned_at: null,
+        picked_up_at: null,
         notes: body.notes || '',
         coupon: body.coupon || null,
         payment_method: body.payment_method || 'cash',
@@ -711,6 +749,96 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json({ error: 'Invalid password' }, { status: 401 }))
     }
 
+    // ---------------- Delivery Zones ----------------
+    // GET /delivery-zones (public)
+    if (route === '/delivery-zones' && method === 'GET') {
+      const zones = await db.collection('delivery_zones').find({ active: { $ne: false } }).sort({ fee: 1 }).toArray()
+      return handleCORS(NextResponse.json(zones.map(stripId)))
+    }
+    // POST /delivery-zones (admin)
+    if (route === '/delivery-zones' && method === 'POST') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const body = await request.json()
+      const zone = {
+        id: uuidv4(),
+        name: body.name || 'New zone',
+        name_lt: body.name_lt || body.name || 'Nauja zona',
+        fee: parseFloat(body.fee) || 0,
+        eta_minutes: parseInt(body.eta_minutes) || 30,
+        postal_codes: Array.isArray(body.postal_codes) ? body.postal_codes : (body.postal_codes || '').split(',').map(s => s.trim()).filter(Boolean),
+        active: body.active !== false,
+      }
+      await db.collection('delivery_zones').insertOne(zone)
+      return handleCORS(NextResponse.json(stripId(zone)))
+    }
+    // PUT /delivery-zones/:id (admin)
+    if (path[0] === 'delivery-zones' && path.length === 2 && method === 'PUT') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const body = await request.json()
+      const update = {}
+      if (body.name !== undefined) update.name = body.name
+      if (body.name_lt !== undefined) update.name_lt = body.name_lt
+      if (body.fee !== undefined) update.fee = parseFloat(body.fee)
+      if (body.eta_minutes !== undefined) update.eta_minutes = parseInt(body.eta_minutes)
+      if (body.postal_codes !== undefined) update.postal_codes = Array.isArray(body.postal_codes) ? body.postal_codes : (body.postal_codes || '').split(',').map(s => s.trim()).filter(Boolean)
+      if (body.active !== undefined) update.active = !!body.active
+      await db.collection('delivery_zones').updateOne({ id: path[1] }, { $set: update })
+      const updated = await db.collection('delivery_zones').findOne({ id: path[1] })
+      return handleCORS(NextResponse.json(stripId(updated)))
+    }
+    // DELETE /delivery-zones/:id (admin)
+    if (path[0] === 'delivery-zones' && path.length === 2 && method === 'DELETE') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      await db.collection('delivery_zones').deleteOne({ id: path[1] })
+      return handleCORS(NextResponse.json({ ok: true }))
+    }
+
+    // ---------------- Order Dispatch (admin) ----------------
+    // POST /orders/:id/dispatch  body: { provider }
+    if (path[0] === 'orders' && path.length === 3 && path[2] === 'dispatch' && method === 'POST') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const body = await request.json()
+      const provider = body.provider || 'in_house'
+      if (!isValidProvider(provider)) return handleCORS(NextResponse.json({ error: 'Invalid provider' }, { status: 400 }))
+      const order = await db.collection('orders').findOne({ id: path[1] })
+      if (!order) return handleCORS(NextResponse.json({ error: 'Order not found' }, { status: 404 }))
+      if (order.type !== 'delivery') return handleCORS(NextResponse.json({ error: 'Not a delivery order' }, { status: 400 }))
+      if (order.status !== 'ready') return handleCORS(NextResponse.json({ error: 'Order must be Ready before dispatch' }, { status: 400 }))
+
+      const courierResp = await createCourierRequest(provider, order)
+      const update = {
+        delivery_method: provider,
+        delivery_provider: provider,
+        delivery_status: 'courier_assigned',
+        courier_reference_id: courierResp.courier_reference_id,
+        courier_tracking_url: courierResp.tracking_url,
+        courier_eta: courierResp.courier_eta || order.courier_eta,
+        courier_assigned_at: new Date(),
+        status: 'out',
+        out_at: new Date(),
+        updated_at: new Date(),
+      }
+      await db.collection('orders').updateOne({ id: path[1] }, { $set: update })
+      const updated = await db.collection('orders').findOne({ id: path[1] })
+      return handleCORS(NextResponse.json({ ok: true, manual: courierResp.manual, order: stripId(updated) }))
+    }
+
+    // POST /orders/:id/picked-up (admin) — courier picked up
+    if (path[0] === 'orders' && path.length === 3 && path[2] === 'picked-up' && method === 'POST') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      await db.collection('orders').updateOne({ id: path[1] }, { $set: { delivery_status: 'on_the_way', picked_up_at: new Date(), updated_at: new Date() } })
+      const updated = await db.collection('orders').findOne({ id: path[1] })
+      return handleCORS(NextResponse.json(stripId(updated)))
+    }
+
+    // POST /orders/:id/delivered (admin) — final delivered
+    if (path[0] === 'orders' && path.length === 3 && path[2] === 'delivered' && method === 'POST') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      await db.collection('orders').updateOne({ id: path[1] }, { $set: { delivery_status: 'delivered', status: 'delivered', delivered_at: new Date(), updated_at: new Date() } })
+      const updated = await db.collection('orders').findOne({ id: path[1] })
+      return handleCORS(NextResponse.json(stripId(updated)))
+    }
+
     // ---------------- Newsletter ----------------
     if (route === '/newsletter' && method === 'POST') {
       const body = await request.json()
@@ -721,6 +849,120 @@ async function handleRoute(request, { params }) {
         { upsert: true }
       )
       return handleCORS(NextResponse.json({ ok: true }))
+    }
+
+    // ---------------- AI Recommendations ----------------
+    // POST /recommend  body: { dish_id?, favorites?: [ids], history?: [ids], limit?: number }
+    if (route === '/recommend' && method === 'POST') {
+      const body = await request.json().catch(() => ({}))
+      const limit = Math.min(parseInt(body.limit) || 3, 6)
+      const allDishes = await db.collection('dishes').find({ available: { $ne: false } }).toArray()
+      const dishMap = Object.fromEntries(allDishes.map(d => [d.id, d]))
+
+      const currentDish = body.dish_id ? dishMap[body.dish_id] : null
+      const favorites = (body.favorites || []).map(id => dishMap[id]).filter(Boolean)
+      const history = (body.history || []).map(id => dishMap[id]).filter(Boolean)
+
+      // Exclude the current dish from suggestions
+      const excludeIds = new Set([body.dish_id, ...(body.favorites || []), ...(body.history || [])].filter(Boolean))
+      const candidates = allDishes.filter(d => !excludeIds.has(d.id))
+
+      const llmKey = process.env.EMERGENT_LLM_KEY
+      const llmUrl = process.env.EMERGENT_LLM_URL || 'https://integrations.emergentagent.com/llm/v1/chat/completions'
+
+      // Helper: rule-based fallback
+      function ruleBased() {
+        // Priority: pair complementary categories with current dish
+        const targetCats = currentDish
+          ? (currentDish.category === 'mains' ? ['starters', 'soups', 'desserts'] :
+             currentDish.category === 'starters' ? ['mains', 'soups'] :
+             currentDish.category === 'soups' ? ['mains', 'starters'] :
+             currentDish.category === 'desserts' ? ['drinks', 'mains'] :
+             ['mains'])
+          : ['mains', 'desserts', 'starters']
+        const scored = candidates.map(d => {
+          let s = 0
+          if (targetCats.includes(d.category)) s += 5
+          if (d.bestseller) s += 3
+          // Match dietary preferences from favorites
+          if (favorites.length) {
+            const favTags = new Set(favorites.flatMap(f => f.dietary_tags || []))
+            if ((d.dietary_tags || []).some(t => favTags.has(t))) s += 2
+          }
+          s += Math.random() * 0.5 // tiny tiebreaker
+          return { dish: d, score: s }
+        }).sort((a, b) => b.score - a.score)
+        return scored.slice(0, limit).map(({ dish }) => ({
+          id: dish.id, name: dish.name, name_lt: dish.name_lt, price: dish.price,
+          image_url: dish.image_url, category: dish.category, bestseller: dish.bestseller,
+          reason: dish.bestseller ? 'A guest favorite' : `Pairs beautifully — ${dish.category}`,
+        }))
+      }
+
+      // Try LLM
+      if (llmKey && candidates.length > 0) {
+        try {
+          const dishList = candidates.slice(0, 25).map(d => ({
+            id: d.id, name: d.name, category: d.category,
+            description: (d.description || '').slice(0, 120),
+            price: d.price, dietary_tags: d.dietary_tags || [], bestseller: !!d.bestseller,
+          }))
+
+          const sys = `You are the head sommelier and maître d' of Aukštaitija, a modern Lithuanian fine-dining restaurant in Kaunas. You know how flavors, courses, and Lithuanian culinary traditions pair together. You always respond with valid minified JSON.`
+
+          const userPrompt = `From the menu below, pick exactly ${limit} dishes that would best COMPLEMENT what the customer is looking at.
+${currentDish ? `\nCurrent dish viewed: ${currentDish.name} (${currentDish.category}, €${currentDish.price}). Description: ${currentDish.description}` : ''}
+${favorites.length ? `\nCustomer favorites so far: ${favorites.map(f => f.name).join(', ')}` : ''}
+${history.length ? `\nRecently browsed: ${history.map(h => h.name).join(', ')}` : ''}
+
+Available menu (do NOT invent dishes — only pick from these ids):
+${JSON.stringify(dishList)}
+
+Rules:
+1. Pick ${limit} different dishes that PAIR well with the current selection (different course, complementary flavors).
+2. Avoid picking another dish from the same exact category unless it's clearly justified.
+3. For each pick, write a single warm, persuasive sentence (max 14 words, English).
+4. Return JSON in this exact shape: {"picks":[{"id":"<dish_id>","reason":"<sentence>"}]}`
+
+          const llmRes = await fetch(llmUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${llmKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'gpt-4o-mini',
+              response_format: { type: 'json_object' },
+              temperature: 0.6,
+              max_tokens: 400,
+              messages: [
+                { role: 'system', content: sys },
+                { role: 'user', content: userPrompt },
+              ],
+            }),
+            signal: AbortSignal.timeout(12000),
+          })
+          if (!llmRes.ok) throw new Error(`LLM HTTP ${llmRes.status}`)
+          const llmData = await llmRes.json()
+          const content = llmData.choices?.[0]?.message?.content || '{}'
+          const parsed = JSON.parse(content)
+          const picks = (parsed.picks || []).slice(0, limit)
+            .map(p => {
+              const d = dishMap[p.id]
+              if (!d) return null
+              return {
+                id: d.id, name: d.name, name_lt: d.name_lt, price: d.price,
+                image_url: d.image_url, category: d.category, bestseller: d.bestseller,
+                reason: (p.reason || '').slice(0, 120) || 'Recommended for you',
+              }
+            }).filter(Boolean)
+          if (picks.length > 0) {
+            return handleCORS(NextResponse.json({ source: 'ai', model: 'gpt-4o-mini', picks }))
+          }
+        } catch (err) {
+          console.warn('LLM recommend failed:', err.message)
+          // fall through to rule-based
+        }
+      }
+
+      return handleCORS(NextResponse.json({ source: 'rules', picks: ruleBased() }))
     }
 
     // ---------------- Analytics (admin) ----------------
@@ -738,6 +980,22 @@ async function handleRoute(request, { params }) {
       }))
       const topDishes = Object.entries(dishCount).sort((a,b) => b[1]-a[1]).slice(0,5).map(([name, count]) => ({ name, count }))
       const avgOrderValue = orders.length > 0 ? totalRevenue / orders.length : 0
+
+      // Delivery analytics
+      const delivOrders = orders.filter(o => o.type === 'delivery')
+      const providerCounts = { in_house: 0, wolt: 0, bolt_food: 0 }
+      let totalDeliveryMs = 0
+      let deliveredCount = 0
+      delivOrders.forEach(o => {
+        const p = o.delivery_method || o.delivery_provider || 'in_house'
+        if (providerCounts[p] !== undefined) providerCounts[p]++
+        if (o.delivered_at && o.created_at) {
+          totalDeliveryMs += new Date(o.delivered_at).getTime() - new Date(o.created_at).getTime()
+          deliveredCount++
+        }
+      })
+      const avgDeliveryMin = deliveredCount > 0 ? Math.round(totalDeliveryMs / deliveredCount / 60000) : 0
+
       return handleCORS(NextResponse.json({
         total_revenue: +totalRevenue.toFixed(2),
         today_revenue: +todayRevenue.toFixed(2),
@@ -746,6 +1004,12 @@ async function handleRoute(request, { params }) {
         total_reservations: reservations.length,
         avg_order_value: +avgOrderValue.toFixed(2),
         top_dishes: topDishes,
+        delivery: {
+          total_delivery_orders: delivOrders.length,
+          provider_counts: providerCounts,
+          avg_delivery_minutes: avgDeliveryMin,
+          delivered_count: deliveredCount,
+        },
       }))
     }
 

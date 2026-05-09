@@ -6,10 +6,17 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ChefHat, Truck, ShoppingBag, Utensils, Clock, AlertTriangle, Bell, BellOff, LogOut, ArrowLeft, Volume2, Flame, CheckCircle2, PackageCheck } from 'lucide-react'
+import { ChefHat, Truck, ShoppingBag, Utensils, Clock, AlertTriangle, Bell, BellOff, LogOut, ArrowLeft, Volume2, Flame, CheckCircle2, PackageCheck, Bike } from 'lucide-react'
 import { toast } from 'sonner'
+import DispatchModal from '@/components/DispatchModal'
 
 const TYPE_ICONS = { delivery: Truck, pickup: ShoppingBag, 'dine-in': Utensils }
+
+const PROVIDER_LABEL = {
+  in_house: { label: 'In-house', cls: 'bg-emerald-500 text-white' },
+  wolt: { label: 'Wolt', cls: 'bg-sky-500 text-white' },
+  bolt_food: { label: 'Bolt Food', cls: 'bg-emerald-400 text-emerald-950' },
+}
 
 function formatElapsed(ms) {
   const s = Math.max(0, Math.floor(ms / 1000))
@@ -29,6 +36,9 @@ function OrderCard({ order, onAccept, onReady, onDispatch, onPriority, now }) {
 
   const accentColor = order.status === 'received' ? 'border-l-amber-500' : order.status === 'preparing' ? 'border-l-blue-500' : 'border-l-green-500'
 
+  const provider = order.delivery_method || order.delivery_provider
+  const providerInfo = provider ? PROVIDER_LABEL[provider] : null
+
   return (
     <Card className={`p-4 border-l-4 ${accentColor} ${isUrgent ? 'ring-2 ring-destructive animate-pulse' : isLate ? 'ring-1 ring-amber-500' : ''}`}>
       <div className="flex items-start justify-between mb-2">
@@ -40,6 +50,11 @@ function OrderCard({ order, onAccept, onReady, onDispatch, onPriority, now }) {
             {order.table_number && (
               <span className="bg-primary text-primary-foreground px-2 py-0.5 rounded-sm font-bold tracking-wide">
                 TABLE {order.table_number}
+              </span>
+            )}
+            {providerInfo && (
+              <span className={`px-2 py-0.5 rounded-sm font-bold tracking-wide ${providerInfo.cls}`}>
+                {providerInfo.label}
               </span>
             )}
             {order.priority && <span className="text-destructive flex items-center gap-1"><Flame className="h-3 w-3" /> PRIORITY</span>}
@@ -97,9 +112,14 @@ function OrderCard({ order, onAccept, onReady, onDispatch, onPriority, now }) {
             <PackageCheck className="h-4 w-4 mr-1" /> Mark Ready
           </Button>
         )}
-        {order.status === 'ready' && (
-          <Button onClick={() => onDispatch(order.id, order.type)} className="flex-1 h-11 bg-primary">
-            <CheckCircle2 className="h-4 w-4 mr-1" /> {order.type === 'delivery' ? 'Dispatch' : 'Hand Over'}
+        {order.status === 'ready' && order.type === 'delivery' && (
+          <Button onClick={() => onDispatch(order)} className="flex-1 h-11 bg-primary">
+            <Bike className="h-4 w-4 mr-1" /> Dispatch Courier
+          </Button>
+        )}
+        {order.status === 'ready' && order.type !== 'delivery' && (
+          <Button onClick={() => onDispatch(order)} className="flex-1 h-11 bg-primary">
+            <CheckCircle2 className="h-4 w-4 mr-1" /> Hand Over
           </Button>
         )}
         <Button onClick={() => onPriority(order.id, !order.priority)} variant="outline" size="icon" className="h-11 w-11" title="Toggle priority">
@@ -118,6 +138,7 @@ function KitchenPage() {
   const [now, setNow] = useState(Date.now())
   const [audioOn, setAudioOn] = useState(true)
   const [filter, setFilter] = useState('all')
+  const [dispatchOrder, setDispatchOrder] = useState(null)
   const prevIdsRef = useRef(new Set())
   const audioCtxRef = useRef(null)
 
@@ -183,6 +204,15 @@ function KitchenPage() {
       body: JSON.stringify(body)
     })
     if (res.ok) fetchOrders()
+  }
+
+  const handleDispatch = (order) => {
+    if (order.type === 'delivery') {
+      setDispatchOrder(order)
+    } else {
+      // pickup / dine-in: just mark delivered directly
+      updateOrder(order.id, { status: 'delivered' })
+    }
   }
 
   const login = async (e) => {
@@ -281,7 +311,7 @@ function KitchenPage() {
                 <OrderCard key={o.id} order={o} now={now}
                   onAccept={(id) => updateOrder(id, { status: 'preparing' })}
                   onReady={(id) => updateOrder(id, { status: 'ready' })}
-                  onDispatch={(id, type) => updateOrder(id, { status: type === 'delivery' ? 'out' : 'delivered' })}
+                  onDispatch={handleDispatch}
                   onPriority={(id, p) => updateOrder(id, { priority: p })}
                 />
               ))}
@@ -300,7 +330,7 @@ function KitchenPage() {
                 <OrderCard key={o.id} order={o} now={now}
                   onAccept={(id) => updateOrder(id, { status: 'preparing' })}
                   onReady={(id) => updateOrder(id, { status: 'ready' })}
-                  onDispatch={(id, type) => updateOrder(id, { status: type === 'delivery' ? 'out' : 'delivered' })}
+                  onDispatch={handleDispatch}
                   onPriority={(id, p) => updateOrder(id, { priority: p })}
                 />
               ))}
@@ -319,7 +349,7 @@ function KitchenPage() {
                 <OrderCard key={o.id} order={o} now={now}
                   onAccept={(id) => updateOrder(id, { status: 'preparing' })}
                   onReady={(id) => updateOrder(id, { status: 'ready' })}
-                  onDispatch={(id, type) => updateOrder(id, { status: type === 'delivery' ? 'out' : 'delivered' })}
+                  onDispatch={handleDispatch}
                   onPriority={(id, p) => updateOrder(id, { priority: p })}
                 />
               ))}
@@ -329,6 +359,14 @@ function KitchenPage() {
 
         <p className="text-center text-xs text-muted-foreground mt-8">Live · auto-refreshes every 4s · Orders &gt; 15min show amber, &gt; 25min flash red</p>
       </div>
+      {dispatchOrder && (
+        <DispatchModal
+          order={dispatchOrder}
+          token={token}
+          onClose={() => setDispatchOrder(null)}
+          onDispatched={() => { setDispatchOrder(null); fetchOrders() }}
+        />
+      )}
     </div>
   )
 }

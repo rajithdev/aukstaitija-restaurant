@@ -8,8 +8,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 import { useApp } from '@/lib/AppContext'
-import { LayoutDashboard, Utensils, ShoppingBag, CalendarDays, BarChart3, Plus, Edit, Trash2, X, LogOut, ChefHat } from 'lucide-react'
+import { LayoutDashboard, Utensils, ShoppingBag, CalendarDays, BarChart3, Plus, Edit, Trash2, X, LogOut, ChefHat, Bike, Truck } from 'lucide-react'
 import { toast } from 'sonner'
+import DispatchModal from '@/components/DispatchModal'
 
 function AdminPage() {
   const { t } = useApp()
@@ -22,6 +23,7 @@ function AdminPage() {
   const [reservations, setReservations] = useState([])
   const [editing, setEditing] = useState(null)
   const [showDishForm, setShowDishForm] = useState(false)
+  const [dispatchOrder, setDispatchOrder] = useState(null)
 
   useEffect(() => {
     const t = localStorage.getItem('aukstaitija_admin_token') || ''
@@ -159,6 +161,32 @@ function AdminPage() {
                 </ul>
               )}
             </Card>
+            {analytics.delivery && (
+              <Card className="p-6">
+                <h3 className="font-serif text-2xl mb-4 flex items-center gap-2"><Bike className="h-5 w-5 text-primary" /> Delivery Performance</h3>
+                <div className="grid sm:grid-cols-4 gap-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-muted-foreground">Total Delivery Orders</p>
+                    <p className="font-serif text-3xl">{analytics.delivery.total_delivery_orders}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-muted-foreground">In-house</p>
+                    <p className="font-serif text-3xl text-emerald-600 dark:text-emerald-400">{analytics.delivery.provider_counts.in_house}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-muted-foreground">Wolt</p>
+                    <p className="font-serif text-3xl text-sky-600 dark:text-sky-400">{analytics.delivery.provider_counts.wolt}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-muted-foreground">Bolt Food</p>
+                    <p className="font-serif text-3xl text-emerald-500">{analytics.delivery.provider_counts.bolt_food}</p>
+                  </div>
+                </div>
+                <p className="text-sm text-muted-foreground mt-4">
+                  Avg delivery time (received → delivered): <span className="font-semibold text-foreground">{analytics.delivery.avg_delivery_minutes} min</span> over {analytics.delivery.delivered_count} delivered orders.
+                </p>
+              </Card>
+            )}
           </div>
         )}
 
@@ -195,23 +223,62 @@ function AdminPage() {
         {tab === 'orders' && (
           <div className="space-y-3">
             {orders.length === 0 && <p className="text-muted-foreground">No orders yet</p>}
-            {orders.map(o => (
-              <Card key={o.id} className="p-4">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <p className="font-serif text-xl">#{o.order_number} <span className="text-xs text-muted-foreground">· {o.type}</span></p>
-                    <p className="text-sm">{o.customer?.name} · {o.customer?.phone}</p>
-                    <p className="text-xs text-muted-foreground mt-1">{o.items?.length} items • €{o.total?.toFixed(2)} • {new Date(o.created_at).toLocaleString()}</p>
-                    <details className="mt-2 text-xs"><summary className="cursor-pointer text-primary">Items</summary>
-                      <ul className="mt-2 space-y-1">{o.items?.map(i => <li key={i.id}>{i.quantity}× {i.name}</li>)}</ul>
-                    </details>
+            {orders.map(o => {
+              const PROVIDER_LABEL = {
+                in_house: { label: 'In-house', cls: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' },
+                wolt: { label: 'Wolt', cls: 'bg-sky-500/15 text-sky-700 dark:text-sky-300' },
+                bolt_food: { label: 'Bolt Food', cls: 'bg-emerald-400/15 text-emerald-700 dark:text-emerald-300' },
+              }
+              const provider = o.delivery_method || o.delivery_provider
+              const providerInfo = provider ? PROVIDER_LABEL[provider] : null
+              return (
+                <Card key={o.id} className="p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <p className="font-serif text-xl">#{o.order_number}</p>
+                        <span className="text-xs uppercase tracking-wider text-muted-foreground">{o.type}</span>
+                        {o.table_number && <span className="bg-primary text-primary-foreground text-[10px] px-2 py-0.5 rounded-sm font-bold">TABLE {o.table_number}</span>}
+                        {providerInfo && (
+                          <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${providerInfo.cls}`}>
+                            <Bike className="h-3 w-3 inline mr-0.5" /> {providerInfo.label}
+                          </span>
+                        )}
+                        {o.delivery_status && o.delivery_status !== 'pending' && (
+                          <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-muted">{o.delivery_status.replace('_',' ')}</span>
+                        )}
+                      </div>
+                      <p className="text-sm">{o.customer?.name} · {o.customer?.phone}</p>
+                      {o.address?.address && <p className="text-xs text-muted-foreground">{o.address.address}, {o.address.city} {o.address.zip} {o.delivery_zone_name && `· ${o.delivery_zone_name}`}</p>}
+                      <p className="text-xs text-muted-foreground mt-1">{o.items?.length} items · €{o.total?.toFixed(2)} · {new Date(o.created_at).toLocaleString()}</p>
+                      <details className="mt-2 text-xs"><summary className="cursor-pointer text-primary">Items</summary>
+                        <ul className="mt-2 space-y-1">{o.items?.map(i => <li key={i.id}>{i.quantity}× {i.name}</li>)}</ul>
+                      </details>
+                    </div>
+                    <div className="flex flex-col gap-2 items-end">
+                      <select value={o.status} onChange={e => updateOrderStatus(o.id, e.target.value)} className="h-9 px-3 text-sm bg-background border border-border rounded-md">
+                        {['received','preparing','ready','out','delivered','cancelled'].map(s => <option key={s} value={s}>{t(`status.${s}`)}</option>)}
+                      </select>
+                      {o.type === 'delivery' && o.status === 'ready' && (
+                        <Button size="sm" onClick={() => setDispatchOrder(o)}>
+                          <Bike className="h-3 w-3 mr-1" /> Dispatch Courier
+                        </Button>
+                      )}
+                      {o.type === 'delivery' && o.delivery_status === 'courier_assigned' && (
+                        <Button size="sm" variant="outline" onClick={async () => { await adminFetch(`/api/orders/${o.id}/picked-up`, { method: 'POST' }); loadAll() }}>
+                          <Truck className="h-3 w-3 mr-1" /> Picked up
+                        </Button>
+                      )}
+                      {o.type === 'delivery' && o.delivery_status === 'on_the_way' && (
+                        <Button size="sm" variant="outline" onClick={async () => { await adminFetch(`/api/orders/${o.id}/delivered`, { method: 'POST' }); loadAll() }}>
+                          ✓ Mark Delivered
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  <select value={o.status} onChange={e => updateOrderStatus(o.id, e.target.value)} className="h-9 px-3 text-sm bg-background border border-border rounded-md">
-                    {['received','preparing','ready','out','delivered','cancelled'].map(s => <option key={s} value={s}>{t(`status.${s}`)}</option>)}
-                  </select>
-                </div>
-              </Card>
-            ))}
+                </Card>
+              )
+            })}
           </div>
         )}
 
@@ -255,6 +322,14 @@ function AdminPage() {
           </div>
         )}
       </div>
+      {dispatchOrder && (
+        <DispatchModal
+          order={dispatchOrder}
+          token={token}
+          onClose={() => setDispatchOrder(null)}
+          onDispatched={() => { setDispatchOrder(null); loadAll() }}
+        />
+      )}
       <Footer />
     </div>
   )
