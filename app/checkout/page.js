@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, Suspense } from 'react'
+import { useEffect, useRef, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
@@ -33,6 +33,12 @@ function CheckoutInner() {
   const [savedAddresses, setSavedAddresses] = useState([])
   const [selectedAddressId, setSelectedAddressId] = useState('new')
 
+  // Effective order context — derived from tableId + selected type so the rest of
+  // the form can stay declarative.
+  const isDineIn = !!tableId
+  const isPickup = !isDineIn && type === 'pickup'
+  const isDelivery = !isDineIn && type === 'delivery'
+
   const discount = parseFloat(params.get('discount') || '0')
   const coupon = params.get('coupon') || ''
 
@@ -47,6 +53,17 @@ function CheckoutInner() {
     if (hydrated && cart.length === 0 && !redirectingToOrder) router.push('/menu')
   }, [cart, router, hydrated, redirectingToOrder])
   useEffect(() => { if (tableId) setType('dine-in') }, [tableId])
+
+  // Switch the default payment mode based on the channel — "pay at table" for QR
+  // dine-in, plain "cash on arrival" for pickup/delivery. We only set the default
+  // once per channel switch so we don't clobber an explicit user choice.
+  const lastChannelRef = useRef(null)
+  useEffect(() => {
+    const channel = isDineIn ? 'dine-in' : (isPickup ? 'pickup' : 'delivery')
+    if (lastChannelRef.current === channel) return
+    lastChannelRef.current = channel
+    setPayment(isDineIn ? 'pay_at_table' : 'cash')
+  }, [isDineIn, isPickup])
   useEffect(() => {
     fetch('/api/delivery-zones').then(r => r.json()).then(d => {
       const arr = Array.isArray(d) ? d : []
@@ -195,12 +212,31 @@ function CheckoutInner() {
             </Card>
             )}
 
-            {/* Customer info */}
+            {/* Customer info — fields appear progressively based on order channel */}
             <Card className="p-6 bg-card grid sm:grid-cols-2 gap-4">
-              <div><Label>{t('checkout.name')} *</Label><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></div>
-              <div><Label>{t('checkout.phone')} {tableId ? '' : '*'}</Label><Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} required={!tableId} /></div>
-              <div className="sm:col-span-2"><Label>{t('checkout.email')}</Label><Input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
-              {type === 'delivery' && (
+              <div className={isDineIn ? 'sm:col-span-2' : ''}>
+                <Label>{t('checkout.name')} *</Label>
+                <Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required />
+              </div>
+
+              {/* Phone — required for delivery & pickup, hidden for QR dine-in */}
+              {!isDineIn && (
+                <div>
+                  <Label>{t('checkout.phone')} *</Label>
+                  <Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} type="tel" autoComplete="tel" required />
+                </div>
+              )}
+
+              {/* Email — only shown for delivery (used for receipts / courier updates) */}
+              {isDelivery && (
+                <div className="sm:col-span-2">
+                  <Label>{t('checkout.email')}</Label>
+                  <Input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} autoComplete="email" />
+                </div>
+              )}
+
+              {/* Address block — delivery only */}
+              {isDelivery && (
                 <>
                   {user && savedAddresses.length > 0 && (
                     <div className="sm:col-span-2">
@@ -267,24 +303,43 @@ function CheckoutInner() {
               <textarea value={notes} onChange={e => setNotes(e.target.value)} className="w-full mt-2 p-3 bg-background border border-border rounded-md text-sm min-h-[80px]" />
             </Card>
 
-            {/* Payment */}
+            {/* Payment — adapts to channel */}
             <Card className="p-6 bg-card">
               <Label className="text-xs uppercase tracking-wider text-muted-foreground">{t('checkout.payment')}</Label>
-              <div className="mt-3 space-y-2">
-                <button type="button" onClick={() => setPayment('cash')} className={`w-full p-4 rounded-md border text-left flex items-center gap-3 ${payment === 'cash' ? 'border-primary bg-primary/10' : 'border-border'}`}>
-                  <Banknote className="h-5 w-5 text-primary" />
-                  <div>
-                    <p className="font-medium">{t('checkout.cash')}</p>
-                    <p className="text-xs text-muted-foreground">Pay in cash or card on arrival</p>
-                  </div>
-                </button>
-                <div className="w-full p-4 rounded-md border border-dashed border-border text-muted-foreground flex items-center gap-3 opacity-60">
-                  <CreditCard className="h-5 w-5" />
-                  <div>
-                    <p className="text-sm">Stripe / PayPal / Revolut — coming soon</p>
+              {isDineIn ? (
+                <div className="mt-3 space-y-2">
+                  <button type="button" onClick={() => setPayment('pay_at_table')} className={`w-full p-4 rounded-md border text-left flex items-center gap-3 ${payment === 'pay_at_table' ? 'border-primary bg-primary/10' : 'border-border'}`}>
+                    <Utensils className="h-5 w-5 text-primary" />
+                    <div>
+                      <p className="font-medium">Pay at table</p>
+                      <p className="text-xs text-muted-foreground">Your server will bring the bill — pay by cash or card.</p>
+                    </div>
+                  </button>
+                  <button type="button" onClick={() => setPayment('pay_at_counter')} className={`w-full p-4 rounded-md border text-left flex items-center gap-3 ${payment === 'pay_at_counter' ? 'border-primary bg-primary/10' : 'border-border'}`}>
+                    <Banknote className="h-5 w-5 text-primary" />
+                    <div>
+                      <p className="font-medium">Pay at counter</p>
+                      <p className="text-xs text-muted-foreground">Settle on your way out at the host stand.</p>
+                    </div>
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  <button type="button" onClick={() => setPayment('cash')} className={`w-full p-4 rounded-md border text-left flex items-center gap-3 ${payment === 'cash' ? 'border-primary bg-primary/10' : 'border-border'}`}>
+                    <Banknote className="h-5 w-5 text-primary" />
+                    <div>
+                      <p className="font-medium">{t('checkout.cash')}</p>
+                      <p className="text-xs text-muted-foreground">Pay in cash or card on arrival</p>
+                    </div>
+                  </button>
+                  <div className="w-full p-4 rounded-md border border-dashed border-border text-muted-foreground flex items-center gap-3 opacity-60">
+                    <CreditCard className="h-5 w-5" />
+                    <div>
+                      <p className="text-sm">Stripe / PayPal / Revolut — coming soon</p>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </Card>
           </div>
 
