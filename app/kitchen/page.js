@@ -34,9 +34,14 @@ function OrderCard({ order, onAccept, onReady, onDispatch, onPriority, now }) {
       <div className="flex items-start justify-between mb-2">
         <div>
           <p className="font-serif text-2xl">#{order.order_number}</p>
-          <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground flex-wrap">
             <TypeIcon className="h-3 w-3" />
             <span className="uppercase tracking-wider">{order.type}</span>
+            {order.table_number && (
+              <span className="bg-primary text-primary-foreground px-2 py-0.5 rounded-sm font-bold tracking-wide">
+                TABLE {order.table_number}
+              </span>
+            )}
             {order.priority && <span className="text-destructive flex items-center gap-1"><Flame className="h-3 w-3" /> PRIORITY</span>}
           </div>
         </div>

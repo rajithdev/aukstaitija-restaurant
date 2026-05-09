@@ -14,8 +14,8 @@ import { toast } from 'sonner'
 function CheckoutInner() {
   const router = useRouter()
   const params = useSearchParams()
-  const { t, lang, cart, cartSubtotal, clearCart } = useApp()
-  const [type, setType] = useState('pickup')
+  const { t, lang, cart, cartSubtotal, clearCart, tableId, tableNumber, setTableId } = useApp()
+  const [type, setType] = useState(tableId ? 'dine-in' : 'pickup')
   const [form, setForm] = useState({ name: '', phone: '', email: '', address: '', city: 'Kaunas', zip: '' })
   const [notes, setNotes] = useState('')
   const [payment, setPayment] = useState('cash')
@@ -29,10 +29,12 @@ function CheckoutInner() {
   const total = +(cartSubtotal + tax + deliveryFee - discount).toFixed(2)
 
   useEffect(() => { if (cart.length === 0) router.push('/menu') }, [cart, router])
+  useEffect(() => { if (tableId) setType('dine-in') }, [tableId])
 
   const submit = async (e) => {
     e.preventDefault()
-    if (!form.name || !form.phone) { toast.error('Name and phone are required'); return }
+    if (!form.name) { toast.error('Name is required'); return }
+    if (!tableId && !form.phone) { toast.error('Phone is required'); return }
     if (type === 'delivery' && !form.address) { toast.error('Address required for delivery'); return }
     setSubmitting(true)
     try {
@@ -41,7 +43,8 @@ function CheckoutInner() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           items: cart,
-          type,
+          type: tableId ? 'dine-in' : type,
+          table_id: tableId || null,
           customer: { name: form.name, phone: form.phone, email: form.email },
           address: type === 'delivery' ? { address: form.address, city: form.city, zip: form.zip } : null,
           notes,
@@ -52,7 +55,7 @@ function CheckoutInner() {
       })
       const data = await res.json()
       if (data.id) {
-        toast.success('Order placed!')
+        toast.success('Order sent to kitchen!')
         clearCart()
         router.push(`/order/${data.id}`)
       } else {
@@ -65,10 +68,17 @@ function CheckoutInner() {
     <div className="min-h-screen bg-background">
       <Navbar />
       <div className="container mx-auto py-10">
-        <h1 className="font-serif text-5xl mb-10">{t('checkout.title')}</h1>
+        <h1 className="font-serif text-5xl mb-4">{t('checkout.title')}</h1>
+        {tableId && (
+          <div className="mb-8 inline-flex items-center gap-3 bg-primary/15 border border-primary/30 px-6 py-3 rounded-full">
+            <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+            <span className="text-sm">Dine-in at <strong className="font-serif text-lg">Table {tableNumber}</strong> — order will be sent directly to the kitchen</span>
+          </div>
+        )}
         <form onSubmit={submit} className="grid lg:grid-cols-3 gap-10">
           <div className="lg:col-span-2 space-y-6">
             {/* Type */}
+            {!tableId && (
             <Card className="p-6 bg-card">
               <Label className="text-xs uppercase tracking-wider text-muted-foreground">{t('checkout.type')}</Label>
               <div className="grid grid-cols-3 gap-3 mt-3">
@@ -86,6 +96,7 @@ function CheckoutInner() {
                 })}
               </div>
             </Card>
+            )}
 
             {/* Customer info */}
             <Card className="p-6 bg-card grid sm:grid-cols-2 gap-4">

@@ -40,12 +40,66 @@ async function ensureSeeded(db) {
     await db.collection('categories').insertMany(CATEGORIES.map(c => ({ ...c })))
   }
   const tablesCount = await db.collection('tables').countDocuments()
-  if (tablesCount === 0) {
-    const tables = []
-    for (let i = 1; i <= 10; i++) {
-      tables.push({ id: `t${i}`, number: i, capacity: i <= 4 ? 2 : i <= 8 ? 4 : 8 })
+  // Migrate old tables (without status field) by reseeding
+  const needsMigration = await db.collection('tables').findOne({ status: { $exists: false } })
+  if (needsMigration || tablesCount === 0) {
+    await db.collection('tables').deleteMany({})
+    const TABLES = [
+      { id: 't1', number: 1, capacity: 2, status: 'available', section: 'Window', x: 0, y: 0 },
+      { id: 't2', number: 2, capacity: 2, status: 'available', section: 'Window', x: 1, y: 0 },
+      { id: 't3', number: 3, capacity: 2, status: 'available', section: 'Window', x: 2, y: 0 },
+      { id: 't4', number: 4, capacity: 2, status: 'available', section: 'Window', x: 3, y: 0 },
+      { id: 't5', number: 5, capacity: 4, status: 'available', section: 'Main Hall', x: 0, y: 1 },
+      { id: 't6', number: 6, capacity: 4, status: 'available', section: 'Main Hall', x: 1, y: 1 },
+      { id: 't7', number: 7, capacity: 4, status: 'available', section: 'Main Hall', x: 2, y: 1 },
+      { id: 't8', number: 8, capacity: 4, status: 'available', section: 'Main Hall', x: 3, y: 1 },
+      { id: 't9', number: 9, capacity: 8, status: 'available', section: 'Private Room', x: 0, y: 2 },
+      { id: 't10', number: 10, capacity: 8, status: 'available', section: 'Private Room', x: 3, y: 2 },
+    ]
+    await db.collection('tables').insertMany(TABLES)
+  }
+}
+
+// Helpers for table lifecycle
+async function getActiveSession(db, tableId) {
+  return await db.collection('table_sessions').findOne({ table_id: tableId, session_status: 'active' })
+}
+
+async function setTableStatus(db, tableId, status) {
+  await db.collection('tables').updateOne({ id: tableId }, { $set: { status } })
+}
+
+async function autoUpdateTableStatuses(db) {
+  const now = new Date()
+  const tables = await db.collection('tables').find({}).toArray()
+  for (const t of tables) {
+    if (t.status === 'out_of_service' || t.status === 'cleaning') continue
+    const session = await getActiveSession(db, t.id)
+    if (session) {
+      if (t.status !== 'occupied') await setTableStatus(db, t.id, 'occupied')
+      continue
     }
-    await db.collection('tables').insertMany(tables)
+    // Look for assigned reservations within next 2h or in past 30 min
+    const reservations = await db.collection('reservations').find({
+      table_id: t.id,
+      status: { $in: ['confirmed', 'pending'] }
+    }).toArray()
+    let isReserved = false
+    for (const r of reservations) {
+      const resDt = new Date(`${r.date}T${r.time}:00`)
+      const diff = resDt.getTime() - now.getTime()
+      if (diff > -30 * 60 * 1000 && diff <= 2 * 60 * 60 * 1000) {
+        isReserved = true
+      } else if (diff < -30 * 60 * 1000) {
+        // No-show: past 30 min and not checked in
+        await db.collection('reservations').updateOne(
+          { id: r.id },
+          { $set: { status: 'no_show', no_show_at: new Date() } }
+        )
+      }
+    }
+    const newStatus = isReserved ? 'reserved' : 'available'
+    if (t.status !== newStatus) await setTableStatus(db, t.id, newStatus)
   }
 }
 
@@ -170,11 +224,41 @@ async function handleRoute(request, { params }) {
       const discount = body.discount || 0
       const total = +(subtotal + tax + deliveryFee - discount).toFixed(2)
 
+      // Dine-in flow: link or create table session
+      let sessionId = null
+      let tableNumber = null
+      if (body.table_id) {
+        const table = await db.collection('tables').findOne({ id: body.table_id })
+        if (!table) return handleCORS(NextResponse.json({ error: 'Invalid table' }, { status: 400 }))
+        tableNumber = table.number
+        let session = await getActiveSession(db, body.table_id)
+        if (!session) {
+          // Auto-create walk-in session
+          session = {
+            id: uuidv4(),
+            table_id: body.table_id,
+            customer_name: body.customer?.name || 'Walk-in',
+            guests: body.guests || 2,
+            started_at: new Date(),
+            ended_at: null,
+            session_status: 'active',
+            origin: 'qr_order',
+          }
+          await db.collection('table_sessions').insertOne(session)
+          await setTableStatus(db, body.table_id, 'occupied')
+        }
+        sessionId = session.id
+      }
+
       const order = {
         id: uuidv4(),
         order_number: 'AK' + Date.now().toString().slice(-6),
         items: body.items,
-        type: body.type || 'pickup', // delivery | pickup | dine-in
+        type: body.type || (body.table_id ? 'dine-in' : 'pickup'),
+        order_type: body.table_id ? 'dine_in' : (body.type === 'delivery' ? 'delivery' : 'pickup'),
+        table_id: body.table_id || null,
+        table_number: tableNumber,
+        session_id: sessionId,
         customer: body.customer || {},
         address: body.address || null,
         notes: body.notes || '',
@@ -303,13 +387,244 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json(reservations.map(stripId)))
     }
 
-    // PUT /reservations/:id (admin)
+    // PUT /reservations/:id (admin) — generic status update
     if (path[0] === 'reservations' && path.length === 2 && method === 'PUT') {
       if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
       const body = await request.json()
-      await db.collection('reservations').updateOne({ id: path[1] }, { $set: { status: body.status } })
+      const update = {}
+      if (body.status) update.status = body.status
+      if (body.table_id !== undefined) update.table_id = body.table_id
+      if (body.status === 'no_show') update.no_show_at = new Date()
+      if (body.status === 'completed') update.completed_at = new Date()
+      await db.collection('reservations').updateOne({ id: path[1] }, { $set: update })
       const updated = await db.collection('reservations').findOne({ id: path[1] })
       return handleCORS(NextResponse.json(stripId(updated)))
+    }
+
+    // POST /reservations/:id/checkin (admin) — body { table_id } -> creates session, occupies table
+    if (path[0] === 'reservations' && path.length === 3 && path[2] === 'checkin' && method === 'POST') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const body = await request.json()
+      const reservation = await db.collection('reservations').findOne({ id: path[1] })
+      if (!reservation) return handleCORS(NextResponse.json({ error: 'Reservation not found' }, { status: 404 }))
+      const tableId = body.table_id || reservation.table_id
+      if (!tableId) return handleCORS(NextResponse.json({ error: 'table_id required' }, { status: 400 }))
+      const table = await db.collection('tables').findOne({ id: tableId })
+      if (!table) return handleCORS(NextResponse.json({ error: 'Table not found' }, { status: 404 }))
+      const existing = await getActiveSession(db, tableId)
+      if (existing) return handleCORS(NextResponse.json({ error: 'Table already has an active session' }, { status: 409 }))
+      const session = {
+        id: uuidv4(),
+        table_id: tableId,
+        reservation_id: reservation.id,
+        customer_name: reservation.name,
+        guests: reservation.guests,
+        started_at: new Date(),
+        ended_at: null,
+        session_status: 'active',
+        origin: 'reservation',
+      }
+      await db.collection('table_sessions').insertOne(session)
+      await db.collection('reservations').updateOne(
+        { id: path[1] },
+        { $set: { status: 'checked_in', checked_in_at: new Date(), table_id: tableId } }
+      )
+      await setTableStatus(db, tableId, 'occupied')
+      return handleCORS(NextResponse.json({ ok: true, session: stripId(session) }))
+    }
+
+    // ---------------- Tables ----------------
+    // GET /tables — enriched list (all + active session + active orders count + upcoming reservation)
+    if (route === '/tables' && method === 'GET') {
+      await autoUpdateTableStatuses(db)
+      const tables = await db.collection('tables').find({}).sort({ number: 1 }).toArray()
+      const result = []
+      const now = new Date()
+      for (const t of tables) {
+        const session = await getActiveSession(db, t.id)
+        let activeOrders = 0
+        let sessionOrders = []
+        if (session) {
+          sessionOrders = await db.collection('orders').find({
+            session_id: session.id,
+            status: { $nin: ['cancelled'] }
+          }).toArray()
+          activeOrders = sessionOrders.filter(o => o.status !== 'delivered' && o.status !== 'completed').length
+        }
+        // Upcoming reservation in next 4 hours assigned to this table
+        const upcomingRes = await db.collection('reservations').findOne({
+          table_id: t.id,
+          status: { $in: ['confirmed', 'pending'] },
+        })
+        result.push({
+          ...stripId(t),
+          active_session: session ? stripId(session) : null,
+          active_orders: activeOrders,
+          session_orders: sessionOrders.map(stripId),
+          upcoming_reservation: upcomingRes ? stripId(upcomingRes) : null,
+        })
+      }
+      return handleCORS(NextResponse.json(result))
+    }
+
+    // GET /tables/:id — single table detail + session + orders
+    if (path[0] === 'tables' && path.length === 2 && method === 'GET') {
+      const table = await db.collection('tables').findOne({ id: path[1] })
+      if (!table) return handleCORS(NextResponse.json({ error: 'Not found' }, { status: 404 }))
+      const session = await getActiveSession(db, path[1])
+      let orders = []
+      if (session) {
+        orders = await db.collection('orders').find({ session_id: session.id }).sort({ created_at: -1 }).toArray()
+      }
+      const upcomingRes = await db.collection('reservations').find({
+        table_id: path[1],
+        status: { $in: ['confirmed', 'pending'] },
+      }).sort({ date: 1, time: 1 }).toArray()
+      return handleCORS(NextResponse.json({
+        ...stripId(table),
+        active_session: session ? stripId(session) : null,
+        orders: orders.map(stripId),
+        upcoming_reservations: upcomingRes.map(stripId),
+      }))
+    }
+
+    // GET /tables/:id/info — public (for QR scan to confirm table existence)
+    if (path[0] === 'tables' && path.length === 3 && path[2] === 'info' && method === 'GET') {
+      const table = await db.collection('tables').findOne({ id: path[1] })
+      if (!table) return handleCORS(NextResponse.json({ error: 'Not found' }, { status: 404 }))
+      return handleCORS(NextResponse.json({
+        id: table.id, number: table.number, capacity: table.capacity, section: table.section, status: table.status,
+      }))
+    }
+
+    // PUT /tables/:id (admin) — update status / capacity / position / out_of_service
+    if (path[0] === 'tables' && path.length === 2 && method === 'PUT') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const body = await request.json()
+      const update = {}
+      const allowed = ['status', 'capacity', 'section', 'x', 'y', 'number']
+      for (const k of allowed) if (body[k] !== undefined) update[k] = body[k]
+      await db.collection('tables').updateOne({ id: path[1] }, { $set: update })
+      const updated = await db.collection('tables').findOne({ id: path[1] })
+      return handleCORS(NextResponse.json(stripId(updated)))
+    }
+
+    // POST /tables/:id/walkin (admin) — { guests, customer_name? }
+    if (path[0] === 'tables' && path.length === 3 && path[2] === 'walkin' && method === 'POST') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const body = await request.json()
+      const table = await db.collection('tables').findOne({ id: path[1] })
+      if (!table) return handleCORS(NextResponse.json({ error: 'Table not found' }, { status: 404 }))
+      const existing = await getActiveSession(db, path[1])
+      if (existing) return handleCORS(NextResponse.json({ error: 'Table already has an active session' }, { status: 409 }))
+      const session = {
+        id: uuidv4(),
+        table_id: path[1],
+        customer_name: body.customer_name || 'Walk-in',
+        guests: parseInt(body.guests) || 2,
+        started_at: new Date(),
+        ended_at: null,
+        session_status: 'active',
+        origin: 'walkin',
+      }
+      await db.collection('table_sessions').insertOne(session)
+      await setTableStatus(db, path[1], 'occupied')
+      return handleCORS(NextResponse.json({ ok: true, session: stripId(session) }))
+    }
+
+    // POST /tables/:id/close (admin) — close active session, mark orders completed, table → cleaning
+    if (path[0] === 'tables' && path.length === 3 && path[2] === 'close' && method === 'POST') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const session = await getActiveSession(db, path[1])
+      if (!session) return handleCORS(NextResponse.json({ error: 'No active session' }, { status: 400 }))
+      await db.collection('table_sessions').updateOne(
+        { id: session.id },
+        { $set: { session_status: 'completed', ended_at: new Date() } }
+      )
+      await db.collection('orders').updateMany(
+        { session_id: session.id, status: { $nin: ['cancelled', 'delivered'] } },
+        { $set: { status: 'delivered', delivered_at: new Date() } }
+      )
+      // If linked reservation, mark completed
+      if (session.reservation_id) {
+        await db.collection('reservations').updateOne(
+          { id: session.reservation_id },
+          { $set: { status: 'completed', completed_at: new Date() } }
+        )
+      }
+      await setTableStatus(db, path[1], 'cleaning')
+      return handleCORS(NextResponse.json({ ok: true }))
+    }
+
+    // POST /tables/:id/cleaned (admin) — cleaning -> available
+    if (path[0] === 'tables' && path.length === 3 && path[2] === 'cleaned' && method === 'POST') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      await setTableStatus(db, path[1], 'available')
+      return handleCORS(NextResponse.json({ ok: true }))
+    }
+
+    // GET /tables/:id/bill (admin) — bill for active session
+    if (path[0] === 'tables' && path.length === 3 && path[2] === 'bill' && method === 'GET') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const session = await getActiveSession(db, path[1])
+      if (!session) return handleCORS(NextResponse.json({ error: 'No active session' }, { status: 400 }))
+      const orders = await db.collection('orders').find({
+        session_id: session.id,
+        status: { $ne: 'cancelled' }
+      }).toArray()
+      const allItems = []
+      let subtotal = 0
+      for (const o of orders) {
+        for (const i of (o.items || [])) {
+          allItems.push({ ...i, order_id: o.id, order_number: o.order_number })
+          subtotal += i.price * i.quantity
+        }
+      }
+      const tax = +(subtotal * 0.21).toFixed(2)
+      const total = +(subtotal + tax).toFixed(2)
+      const table = await db.collection('tables').findOne({ id: path[1] })
+      return handleCORS(NextResponse.json({
+        table: stripId(table),
+        session: stripId(session),
+        items: allItems,
+        order_count: orders.length,
+        subtotal: +subtotal.toFixed(2),
+        tax,
+        total,
+        currency: 'EUR',
+        vat_rate: 21,
+        invoice_number: 'INV' + Date.now().toString().slice(-8),
+        issued_at: new Date(),
+      }))
+    }
+
+    // POST /tables/:id/pay (admin) — mark all session orders paid, close session, table -> cleaning
+    if (path[0] === 'tables' && path.length === 3 && path[2] === 'pay' && method === 'POST') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const body = await request.json().catch(() => ({}))
+      const paymentMethod = body.payment_method || 'cash'
+      const session = await getActiveSession(db, path[1])
+      if (!session) return handleCORS(NextResponse.json({ error: 'No active session' }, { status: 400 }))
+      await db.collection('orders').updateMany(
+        { session_id: session.id },
+        { $set: { payment_status: 'paid', payment_method: paymentMethod, paid_at: new Date() } }
+      )
+      await db.collection('orders').updateMany(
+        { session_id: session.id, status: { $nin: ['cancelled', 'delivered'] } },
+        { $set: { status: 'delivered', delivered_at: new Date() } }
+      )
+      await db.collection('table_sessions').updateOne(
+        { id: session.id },
+        { $set: { session_status: 'completed', ended_at: new Date(), paid_at: new Date(), payment_method: paymentMethod } }
+      )
+      if (session.reservation_id) {
+        await db.collection('reservations').updateOne(
+          { id: session.reservation_id },
+          { $set: { status: 'completed', completed_at: new Date() } }
+        )
+      }
+      await setTableStatus(db, path[1], 'cleaning')
+      return handleCORS(NextResponse.json({ ok: true }))
     }
 
     // ---------------- Admin auth ----------------

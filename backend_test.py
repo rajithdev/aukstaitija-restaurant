@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-Backend API Test Suite for Aukstaitija Restaurant
-Tests all endpoints systematically as per requirements
+Backend test suite for Aukstaitija Restaurant Table Lifecycle
+Tests all 7 scenarios from the review request
 """
-
 import requests
 import json
 from datetime import datetime, timedelta
@@ -11,999 +10,777 @@ from datetime import datetime, timedelta
 # Configuration
 BASE_URL = "https://277842d5-3eca-4a9e-bbec-aeb8b56bce5e.preview.emergentagent.com/api"
 ADMIN_TOKEN = "admin123"
-ADMIN_HEADERS = {"x-admin-token": ADMIN_TOKEN, "Content-Type": "application/json"}
-HEADERS = {"Content-Type": "application/json"}
-
-# Test results tracking
-test_results = {
-    "passed": [],
-    "failed": [],
-    "total": 0
-}
+HEADERS_ADMIN = {"x-admin-token": ADMIN_TOKEN, "Content-Type": "application/json"}
+HEADERS_NO_AUTH = {"Content-Type": "application/json"}
 
 def log_test(test_name, passed, details=""):
-    """Log test result"""
-    test_results["total"] += 1
-    if passed:
-        test_results["passed"].append(test_name)
-        print(f"✅ PASS: {test_name}")
-    else:
-        test_results["failed"].append(test_name)
-        print(f"❌ FAIL: {test_name}")
+    status = "✅ PASS" if passed else "❌ FAIL"
+    print(f"{status} - {test_name}")
     if details:
-        print(f"   Details: {details}")
+        print(f"  Details: {details}")
+    return passed
 
-def print_summary():
-    """Print test summary"""
-    print("\n" + "="*80)
-    print("TEST SUMMARY")
-    print("="*80)
-    print(f"Total Tests: {test_results['total']}")
-    print(f"Passed: {len(test_results['passed'])}")
-    print(f"Failed: {len(test_results['failed'])}")
-    print(f"Success Rate: {len(test_results['passed'])/test_results['total']*100:.1f}%")
-    if test_results['failed']:
-        print("\nFailed Tests:")
-        for test in test_results['failed']:
-            print(f"  - {test}")
-    print("="*80)
-
-# ============================================================================
-# TEST 1: Categories API
-# ============================================================================
-def test_categories():
-    """Test GET /api/categories"""
-    print("\n" + "="*80)
-    print("TEST 1: Categories API")
-    print("="*80)
-    
+def cleanup_table(table_id):
+    """Helper to reset table state: close session + mark cleaned"""
     try:
-        response = requests.get(f"{BASE_URL}/categories", timeout=10)
-        print(f"Status: {response.status_code}")
+        requests.post(f"{BASE_URL}/tables/{table_id}/close", headers=HEADERS_ADMIN)
+        requests.post(f"{BASE_URL}/tables/{table_id}/cleaned", headers=HEADERS_ADMIN)
+    except:
+        pass
+
+# ============================================================
+# TEST 1: Tables list/detail endpoints
+# ============================================================
+def test_tables_endpoints():
+    print("\n=== TEST 1: Tables list/detail endpoints ===")
+    results = []
+    
+    # 1.1: GET /api/tables → 200, array length 10
+    try:
+        resp = requests.get(f"{BASE_URL}/tables", headers=HEADERS_ADMIN)
+        data = resp.json()
+        passed = resp.status_code == 200 and isinstance(data, list) and len(data) == 10
+        results.append(log_test("GET /api/tables returns 10 tables", passed, 
+                               f"Status: {resp.status_code}, Count: {len(data) if isinstance(data, list) else 'N/A'}"))
         
-        if response.status_code == 200:
-            data = response.json()
-            print(f"Response: {json.dumps(data, indent=2)}")
-            
-            # Verify it's an array
-            if not isinstance(data, list):
-                log_test("Categories returns array", False, f"Expected array, got {type(data)}")
-                return
-            
-            # Verify 5 categories
-            if len(data) != 5:
-                log_test("Categories count is 5", False, f"Expected 5, got {len(data)}")
-            else:
-                log_test("Categories count is 5", True)
-            
-            # Verify each has 'order' field and is sorted
-            has_order = all('order' in cat for cat in data)
-            if not has_order:
-                log_test("Categories have 'order' field", False)
-            else:
-                log_test("Categories have 'order' field", True)
-                
-                # Check if sorted by order
-                orders = [cat['order'] for cat in data]
-                is_sorted = orders == sorted(orders)
-                log_test("Categories sorted by order", is_sorted, f"Orders: {orders}")
-        else:
-            log_test("Categories API returns 200", False, f"Got {response.status_code}: {response.text}")
+        # Check fields
+        if passed and len(data) > 0:
+            t = data[0]
+            has_fields = all(k in t for k in ['id', 'number', 'capacity', 'status', 'section', 'x', 'y', 'active_session', 'active_orders', 'upcoming_reservation'])
+            results.append(log_test("Table has all required fields", has_fields, 
+                                   f"Fields: {list(t.keys())}"))
     except Exception as e:
-        log_test("Categories API", False, f"Exception: {str(e)}")
-
-# ============================================================================
-# TEST 2: Dishes API - List and Filters
-# ============================================================================
-def test_dishes_list():
-    """Test GET /api/dishes with various filters"""
-    print("\n" + "="*80)
-    print("TEST 2: Dishes API - List and Filters")
-    print("="*80)
+        results.append(log_test("GET /api/tables", False, str(e)))
     
+    # 1.2: GET /api/tables/t1 → 200, has active_session and orders
     try:
-        # Test basic list
-        response = requests.get(f"{BASE_URL}/dishes", timeout=10)
-        print(f"Basic list status: {response.status_code}")
-        
-        if response.status_code == 200:
-            dishes = response.json()
-            print(f"Total dishes: {len(dishes)}")
-            
-            if len(dishes) == 10:
-                log_test("Dishes list returns 10 items", True)
-            else:
-                log_test("Dishes list returns 10 items", False, f"Got {len(dishes)}")
-            
-            # Test search filter
-            response = requests.get(f"{BASE_URL}/dishes?search=cepelinai", timeout=10)
-            if response.status_code == 200:
-                search_results = response.json()
-                print(f"Search 'cepelinai' results: {len(search_results)}")
-                has_cepelinai = any('cepelinai' in d.get('name', '').lower() or 'cepelinai' in d.get('id', '').lower() for d in search_results)
-                log_test("Dishes search filter works", has_cepelinai, f"Found {len(search_results)} results")
-            else:
-                log_test("Dishes search filter", False, f"Status {response.status_code}")
-            
-            # Test category filter
-            response = requests.get(f"{BASE_URL}/dishes?category=mains", timeout=10)
-            if response.status_code == 200:
-                mains = response.json()
-                all_mains = all(d.get('category') == 'mains' for d in mains)
-                log_test("Dishes category filter works", all_mains, f"Found {len(mains)} mains")
-            else:
-                log_test("Dishes category filter", False, f"Status {response.status_code}")
-            
-            # Test dietary filter
-            response = requests.get(f"{BASE_URL}/dishes?dietary=veg", timeout=10)
-            if response.status_code == 200:
-                veg_dishes = response.json()
-                print(f"Vegetarian dishes: {len(veg_dishes)}")
-                log_test("Dishes dietary filter works", True, f"Found {len(veg_dishes)} veg dishes")
-            else:
-                log_test("Dishes dietary filter", False, f"Status {response.status_code}")
-            
-            # Test sort price_asc
-            response = requests.get(f"{BASE_URL}/dishes?sort=price_asc", timeout=10)
-            if response.status_code == 200:
-                sorted_dishes = response.json()
-                prices = [d.get('price', 0) for d in sorted_dishes]
-                is_ascending = prices == sorted(prices)
-                log_test("Dishes sort price_asc works", is_ascending, f"Prices: {prices[:3]}...")
-            else:
-                log_test("Dishes sort price_asc", False, f"Status {response.status_code}")
-            
-            # Test sort price_desc
-            response = requests.get(f"{BASE_URL}/dishes?sort=price_desc", timeout=10)
-            if response.status_code == 200:
-                sorted_dishes = response.json()
-                prices = [d.get('price', 0) for d in sorted_dishes]
-                is_descending = prices == sorted(prices, reverse=True)
-                log_test("Dishes sort price_desc works", is_descending, f"Prices: {prices[:3]}...")
-            else:
-                log_test("Dishes sort price_desc", False, f"Status {response.status_code}")
-        else:
-            log_test("Dishes list API", False, f"Status {response.status_code}: {response.text}")
+        resp = requests.get(f"{BASE_URL}/tables/t1", headers=HEADERS_ADMIN)
+        data = resp.json()
+        passed = resp.status_code == 200 and 'active_session' in data and 'orders' in data
+        results.append(log_test("GET /api/tables/t1 returns detail", passed, 
+                               f"Status: {resp.status_code}, Has active_session: {'active_session' in data}"))
     except Exception as e:
-        log_test("Dishes list API", False, f"Exception: {str(e)}")
-
-# ============================================================================
-# TEST 3: Dishes API - Get by ID
-# ============================================================================
-def test_dishes_by_id():
-    """Test GET /api/dishes/:id"""
-    print("\n" + "="*80)
-    print("TEST 3: Dishes API - Get by ID")
-    print("="*80)
+        results.append(log_test("GET /api/tables/t1", False, str(e)))
     
+    # 1.3: GET /api/tables/nope → 404
     try:
-        # Test valid dish ID
-        response = requests.get(f"{BASE_URL}/dishes/cepelinai", timeout=10)
-        print(f"GET cepelinai status: {response.status_code}")
-        
-        if response.status_code == 200:
-            dish = response.json()
-            print(f"Dish: {dish.get('name', 'N/A')}")
-            log_test("Get dish by ID (cepelinai)", True, f"Name: {dish.get('name')}")
-        else:
-            log_test("Get dish by ID (cepelinai)", False, f"Status {response.status_code}")
-        
-        # Test nonexistent dish
-        response = requests.get(f"{BASE_URL}/dishes/nonexistent", timeout=10)
-        print(f"GET nonexistent status: {response.status_code}")
-        
-        if response.status_code == 404:
-            log_test("Get nonexistent dish returns 404", True)
-        else:
-            log_test("Get nonexistent dish returns 404", False, f"Got {response.status_code}")
+        resp = requests.get(f"{BASE_URL}/tables/nope", headers=HEADERS_ADMIN)
+        passed = resp.status_code == 404
+        results.append(log_test("GET /api/tables/nope returns 404", passed, 
+                               f"Status: {resp.status_code}"))
     except Exception as e:
-        log_test("Dishes by ID API", False, f"Exception: {str(e)}")
-
-# ============================================================================
-# TEST 4: Dishes Admin CRUD
-# ============================================================================
-def test_dishes_admin_crud():
-    """Test POST/PUT/DELETE /api/dishes with admin auth"""
-    print("\n" + "="*80)
-    print("TEST 4: Dishes Admin CRUD")
-    print("="*80)
+        results.append(log_test("GET /api/tables/nope", False, str(e)))
     
-    new_dish_id = None
-    
+    # 1.4: GET /api/tables/t1/info → 200, PUBLIC (no auth)
     try:
-        # Test POST without token (should fail)
-        dish_data = {
-            "name": "Test Dish",
-            "price": 9.99,
-            "category": "starters"
-        }
-        response = requests.post(f"{BASE_URL}/dishes", json=dish_data, headers=HEADERS, timeout=10)
-        print(f"POST without token status: {response.status_code}")
-        
-        if response.status_code == 401:
-            log_test("POST dish without token returns 401", True)
-        else:
-            log_test("POST dish without token returns 401", False, f"Got {response.status_code}")
-        
-        # Test POST with token (should succeed)
-        response = requests.post(f"{BASE_URL}/dishes", json=dish_data, headers=ADMIN_HEADERS, timeout=10)
-        print(f"POST with token status: {response.status_code}")
-        
-        if response.status_code == 200:
-            new_dish = response.json()
-            new_dish_id = new_dish.get('id')
-            print(f"Created dish ID: {new_dish_id}")
-            log_test("POST dish with token succeeds", True, f"ID: {new_dish_id}")
-            
-            # Test PUT to update price
-            update_data = {"price": 12.50}
-            response = requests.put(f"{BASE_URL}/dishes/{new_dish_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
-            print(f"PUT dish status: {response.status_code}")
-            
-            if response.status_code == 200:
-                updated_dish = response.json()
-                if updated_dish.get('price') == 12.50:
-                    log_test("PUT dish updates price", True, f"New price: {updated_dish.get('price')}")
-                else:
-                    log_test("PUT dish updates price", False, f"Expected 12.50, got {updated_dish.get('price')}")
-            else:
-                log_test("PUT dish", False, f"Status {response.status_code}")
-            
-            # Test DELETE
-            response = requests.delete(f"{BASE_URL}/dishes/{new_dish_id}", headers=ADMIN_HEADERS, timeout=10)
-            print(f"DELETE dish status: {response.status_code}")
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('ok') == True:
-                    log_test("DELETE dish succeeds", True)
-                else:
-                    log_test("DELETE dish succeeds", False, f"Response: {result}")
-            else:
-                log_test("DELETE dish", False, f"Status {response.status_code}")
-        else:
-            log_test("POST dish with token", False, f"Status {response.status_code}: {response.text}")
+        resp = requests.get(f"{BASE_URL}/tables/t1/info", headers=HEADERS_NO_AUTH)
+        data = resp.json()
+        passed = resp.status_code == 200 and all(k in data for k in ['id', 'number', 'capacity', 'section', 'status'])
+        results.append(log_test("GET /api/tables/t1/info (PUBLIC) works", passed, 
+                               f"Status: {resp.status_code}, Fields: {list(data.keys()) if isinstance(data, dict) else 'N/A'}"))
     except Exception as e:
-        log_test("Dishes admin CRUD", False, f"Exception: {str(e)}")
-
-# ============================================================================
-# TEST 5: Orders API
-# ============================================================================
-def test_orders():
-    """Test POST /api/orders and related endpoints"""
-    print("\n" + "="*80)
-    print("TEST 5: Orders API")
-    print("="*80)
+        results.append(log_test("GET /api/tables/t1/info", False, str(e)))
     
-    order_id = None
-    
+    # 1.5: PUT /api/tables/t1 without admin → 401
     try:
-        # Create an order
+        resp = requests.put(f"{BASE_URL}/tables/t1", 
+                           headers=HEADERS_NO_AUTH, 
+                           json={"status": "out_of_service"})
+        passed = resp.status_code == 401
+        results.append(log_test("PUT /api/tables/t1 without admin returns 401", passed, 
+                               f"Status: {resp.status_code}"))
+    except Exception as e:
+        results.append(log_test("PUT /api/tables/t1 no auth", False, str(e)))
+    
+    # 1.6: PUT /api/tables/t1 with admin → 200, status updated
+    try:
+        resp = requests.put(f"{BASE_URL}/tables/t1", 
+                           headers=HEADERS_ADMIN, 
+                           json={"status": "out_of_service"})
+        data = resp.json()
+        passed = resp.status_code == 200 and data.get('status') == 'out_of_service'
+        results.append(log_test("PUT /api/tables/t1 with admin updates status", passed, 
+                               f"Status: {resp.status_code}, New status: {data.get('status')}"))
+        
+        # Reset back to available
+        requests.put(f"{BASE_URL}/tables/t1", headers=HEADERS_ADMIN, json={"status": "available"})
+    except Exception as e:
+        results.append(log_test("PUT /api/tables/t1 with admin", False, str(e)))
+    
+    return all(results)
+
+# ============================================================
+# TEST 2: Walk-in seating
+# ============================================================
+def test_walkin_seating():
+    print("\n=== TEST 2: Walk-in seating ===")
+    results = []
+    cleanup_table('t5')
+    
+    # 2.1: Without admin token → 401
+    try:
+        resp = requests.post(f"{BASE_URL}/tables/t5/walkin", 
+                            headers=HEADERS_NO_AUTH, 
+                            json={"guests": 4, "customer_name": "Petras Kazlauskas"})
+        passed = resp.status_code == 401
+        results.append(log_test("POST /api/tables/t5/walkin without admin returns 401", passed, 
+                               f"Status: {resp.status_code}"))
+    except Exception as e:
+        results.append(log_test("Walk-in without auth", False, str(e)))
+    
+    # 2.2: With admin token → 200, creates session
+    try:
+        resp = requests.post(f"{BASE_URL}/tables/t5/walkin", 
+                            headers=HEADERS_ADMIN, 
+                            json={"guests": 4, "customer_name": "Petras Kazlauskas"})
+        data = resp.json()
+        passed = resp.status_code == 200 and data.get('ok') == True and 'session' in data
+        session_data = data.get('session', {})
+        session_checks = (
+            session_data.get('session_status') == 'active' and
+            session_data.get('origin') == 'walkin' and
+            session_data.get('customer_name') == 'Petras Kazlauskas'
+        )
+        results.append(log_test("POST /api/tables/t5/walkin creates session", passed and session_checks, 
+                               f"Status: {resp.status_code}, Session status: {session_data.get('session_status')}, Origin: {session_data.get('origin')}"))
+    except Exception as e:
+        results.append(log_test("Walk-in with admin", False, str(e)))
+    
+    # 2.3: Verify table status is 'occupied'
+    try:
+        resp = requests.get(f"{BASE_URL}/tables/t5", headers=HEADERS_ADMIN)
+        data = resp.json()
+        passed = data.get('status') == 'occupied' and data.get('active_session') is not None
+        results.append(log_test("Table t5 status is 'occupied' after walk-in", passed, 
+                               f"Status: {data.get('status')}, Has session: {data.get('active_session') is not None}"))
+    except Exception as e:
+        results.append(log_test("Verify t5 occupied", False, str(e)))
+    
+    # 2.4: Try walk-in again on same table → 409
+    try:
+        resp = requests.post(f"{BASE_URL}/tables/t5/walkin", 
+                            headers=HEADERS_ADMIN, 
+                            json={"guests": 2, "customer_name": "Jonas Petraitis"})
+        passed = resp.status_code == 409
+        results.append(log_test("Second walk-in on t5 returns 409", passed, 
+                               f"Status: {resp.status_code}"))
+    except Exception as e:
+        results.append(log_test("Second walk-in", False, str(e)))
+    
+    # 2.5: Cleanup - close and clean
+    try:
+        resp1 = requests.post(f"{BASE_URL}/tables/t5/close", headers=HEADERS_ADMIN)
+        resp2 = requests.post(f"{BASE_URL}/tables/t5/cleaned", headers=HEADERS_ADMIN)
+        passed = resp1.status_code == 200 and resp2.status_code == 200
+        results.append(log_test("Cleanup t5 (close + cleaned)", passed, 
+                               f"Close: {resp1.status_code}, Cleaned: {resp2.status_code}"))
+        
+        # Verify available
+        resp = requests.get(f"{BASE_URL}/tables/t5", headers=HEADERS_ADMIN)
+        data = resp.json()
+        passed = data.get('status') == 'available'
+        results.append(log_test("Table t5 status is 'available' after cleanup", passed, 
+                               f"Status: {data.get('status')}"))
+    except Exception as e:
+        results.append(log_test("Cleanup t5", False, str(e)))
+    
+    return all(results)
+
+# ============================================================
+# TEST 3: QR/dine-in order auto-creates session
+# ============================================================
+def test_qr_order_session():
+    print("\n=== TEST 3: QR/dine-in order auto-creates session ===")
+    results = []
+    cleanup_table('t2')
+    
+    # 3.1: POST /api/orders with table_id → creates session, occupies table
+    try:
         order_data = {
             "items": [
-                {
-                    "id": "cepelinai",
-                    "name": "Cepelinai",
-                    "price": 14.50,
-                    "quantity": 2
-                }
+                {"id": "cepelinai", "name": "Cepelinai", "price": 14.5, "quantity": 1}
             ],
-            "type": "delivery",
-            "customer": {
-                "name": "Petras Petraitis",
-                "phone": "+37061234567"
-            },
-            "address": {
-                "address": "Laisvės al. 123, Kaunas"
-            },
-            "payment_method": "cash"
+            "table_id": "t2",
+            "customer": {"name": "Gintarė Jankauskas"}
         }
-        
-        response = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS, timeout=10)
-        print(f"POST order status: {response.status_code}")
-        
-        if response.status_code == 200:
-            order = response.json()
-            order_id = order.get('id')
-            order_number = order.get('order_number')
-            subtotal = order.get('subtotal')
-            tax = order.get('tax')
-            delivery_fee = order.get('delivery_fee')
-            total = order.get('total')
-            
-            print(f"Order ID: {order_id}")
-            print(f"Order Number: {order_number}")
-            print(f"Subtotal: €{subtotal}")
-            print(f"Tax: €{tax}")
-            print(f"Delivery Fee: €{delivery_fee}")
-            print(f"Total: €{total}")
-            
-            # Verify order number starts with AK
-            if order_number and order_number.startswith('AK'):
-                log_test("Order number starts with AK", True, f"Number: {order_number}")
-            else:
-                log_test("Order number starts with AK", False, f"Got: {order_number}")
-            
-            # Verify calculations
-            expected_subtotal = 29.00  # 14.50 * 2
-            expected_tax = 6.09  # 29.00 * 0.21
-            expected_delivery = 3.50
-            expected_total = 38.59  # 29.00 + 6.09 + 3.50
-            
-            if abs(subtotal - expected_subtotal) < 0.01:
-                log_test("Order subtotal correct", True, f"€{subtotal}")
-            else:
-                log_test("Order subtotal correct", False, f"Expected €{expected_subtotal}, got €{subtotal}")
-            
-            if abs(tax - expected_tax) < 0.01:
-                log_test("Order tax (21%) correct", True, f"€{tax}")
-            else:
-                log_test("Order tax (21%) correct", False, f"Expected €{expected_tax}, got €{tax}")
-            
-            if abs(delivery_fee - expected_delivery) < 0.01:
-                log_test("Order delivery fee correct", True, f"€{delivery_fee}")
-            else:
-                log_test("Order delivery fee correct", False, f"Expected €{expected_delivery}, got €{delivery_fee}")
-            
-            if abs(total - expected_total) < 0.01:
-                log_test("Order total correct", True, f"€{total}")
-            else:
-                log_test("Order total correct", False, f"Expected €{expected_total}, got €{total}")
-            
-            # Test GET order by ID
-            response = requests.get(f"{BASE_URL}/orders/{order_id}", timeout=10)
-            print(f"GET order by ID status: {response.status_code}")
-            
-            if response.status_code == 200:
-                fetched_order = response.json()
-                log_test("GET order by ID works", True, f"ID: {fetched_order.get('id')}")
-            else:
-                log_test("GET order by ID", False, f"Status {response.status_code}")
-            
-            # Test GET orders without token (should fail)
-            response = requests.get(f"{BASE_URL}/orders", headers=HEADERS, timeout=10)
-            print(f"GET orders without token status: {response.status_code}")
-            
-            if response.status_code == 401:
-                log_test("GET orders without token returns 401", True)
-            else:
-                log_test("GET orders without token returns 401", False, f"Got {response.status_code}")
-            
-            # Test GET orders with token
-            response = requests.get(f"{BASE_URL}/orders", headers=ADMIN_HEADERS, timeout=10)
-            print(f"GET orders with token status: {response.status_code}")
-            
-            if response.status_code == 200:
-                orders = response.json()
-                has_our_order = any(o.get('id') == order_id for o in orders)
-                log_test("GET orders with token works", has_our_order, f"Found {len(orders)} orders")
-            else:
-                log_test("GET orders with token", False, f"Status {response.status_code}")
-            
-            # Test PUT order status
-            update_data = {"status": "preparing"}
-            response = requests.put(f"{BASE_URL}/orders/{order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
-            print(f"PUT order status: {response.status_code}")
-            
-            if response.status_code == 200:
-                updated_order = response.json()
-                if updated_order.get('status') == 'preparing':
-                    log_test("PUT order status works", True, f"Status: {updated_order.get('status')}")
-                else:
-                    log_test("PUT order status works", False, f"Expected 'preparing', got {updated_order.get('status')}")
-            else:
-                log_test("PUT order status", False, f"Status {response.status_code}")
-        else:
-            log_test("POST order", False, f"Status {response.status_code}: {response.text}")
+        resp = requests.post(f"{BASE_URL}/orders", headers=HEADERS_NO_AUTH, json=order_data)
+        data = resp.json()
+        passed = (
+            resp.status_code == 200 and
+            data.get('order_type') == 'dine_in' and
+            data.get('table_id') == 't2' and
+            data.get('table_number') == 2 and
+            data.get('session_id') is not None and
+            data.get('type') == 'dine-in'
+        )
+        first_session_id = data.get('session_id')
+        results.append(log_test("POST /api/orders with table_id creates session", passed, 
+                               f"Status: {resp.status_code}, Order type: {data.get('order_type')}, Session ID: {first_session_id}"))
     except Exception as e:
-        log_test("Orders API", False, f"Exception: {str(e)}")
-
-# ============================================================================
-# TEST 6: Reservations API
-# ============================================================================
-def test_reservations():
-    """Test POST /api/reservations and availability"""
-    print("\n" + "="*80)
-    print("TEST 6: Reservations API")
-    print("="*80)
+        results.append(log_test("QR order creates session", False, str(e)))
+        first_session_id = None
     
+    # 3.2: Verify table t2 is occupied with session origin='qr_order'
+    try:
+        resp = requests.get(f"{BASE_URL}/tables/t2", headers=HEADERS_ADMIN)
+        data = resp.json()
+        session = data.get('active_session', {})
+        passed = (
+            data.get('status') == 'occupied' and
+            session.get('origin') == 'qr_order' and
+            len(data.get('orders', [])) > 0
+        )
+        results.append(log_test("Table t2 occupied with origin='qr_order'", passed, 
+                               f"Status: {data.get('status')}, Origin: {session.get('origin')}, Orders: {len(data.get('orders', []))}"))
+    except Exception as e:
+        results.append(log_test("Verify t2 occupied", False, str(e)))
+    
+    # 3.3: POST second order for same table → reuses session
+    try:
+        order_data2 = {
+            "items": [
+                {"id": "kibinai", "name": "Kibinai", "price": 6.5, "quantity": 2}
+            ],
+            "table_id": "t2",
+            "customer": {"name": "Gintarė Jankauskas"}
+        }
+        resp = requests.post(f"{BASE_URL}/orders", headers=HEADERS_NO_AUTH, json=order_data2)
+        data = resp.json()
+        second_session_id = data.get('session_id')
+        passed = (
+            resp.status_code == 200 and
+            second_session_id == first_session_id
+        )
+        results.append(log_test("Second order reuses same session", passed, 
+                               f"Status: {resp.status_code}, Same session: {second_session_id == first_session_id}"))
+    except Exception as e:
+        results.append(log_test("Second QR order", False, str(e)))
+    
+    # 3.4: Cleanup
+    cleanup_table('t2')
+    results.append(log_test("Cleanup t2", True))
+    
+    return all(results)
+
+# ============================================================
+# TEST 4: Reservation check-in
+# ============================================================
+def test_reservation_checkin():
+    print("\n=== TEST 4: Reservation check-in ===")
+    results = []
+    cleanup_table('t1')
+    
+    # 4.1: Create a reservation
     reservation_id = None
-    
     try:
-        # Create a reservation
-        reservation_data = {
-            "name": "Jonas Jonaitis",
-            "phone": "+37061111111",
+        res_data = {
+            "date": "2099-12-30",
+            "time": "19:30",
+            "guests": 2,
+            "name": "Ona Petraitė",
+            "phone": "+37061234567"
+        }
+        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
+        data = resp.json()
+        reservation_id = data.get('id')
+        passed = resp.status_code == 200 and reservation_id is not None
+        results.append(log_test("Create reservation", passed, 
+                               f"Status: {resp.status_code}, ID: {reservation_id}"))
+    except Exception as e:
+        results.append(log_test("Create reservation", False, str(e)))
+        return False
+    
+    # 4.2: Check-in without admin → 401
+    try:
+        resp = requests.post(f"{BASE_URL}/reservations/{reservation_id}/checkin", 
+                            headers=HEADERS_NO_AUTH, 
+                            json={"table_id": "t1"})
+        passed = resp.status_code == 401
+        results.append(log_test("Check-in without admin returns 401", passed, 
+                               f"Status: {resp.status_code}"))
+    except Exception as e:
+        results.append(log_test("Check-in no auth", False, str(e)))
+    
+    # 4.3: Check-in with admin → 200, creates session
+    try:
+        resp = requests.post(f"{BASE_URL}/reservations/{reservation_id}/checkin", 
+                            headers=HEADERS_ADMIN, 
+                            json={"table_id": "t1"})
+        data = resp.json()
+        session = data.get('session', {})
+        passed = (
+            resp.status_code == 200 and
+            data.get('ok') == True and
+            session.get('origin') == 'reservation'
+        )
+        results.append(log_test("Check-in with admin creates session", passed, 
+                               f"Status: {resp.status_code}, Origin: {session.get('origin')}"))
+    except Exception as e:
+        results.append(log_test("Check-in with admin", False, str(e)))
+    
+    # 4.4: Verify reservation status is 'checked_in'
+    try:
+        resp = requests.get(f"{BASE_URL}/reservations", headers=HEADERS_ADMIN)
+        data = resp.json()
+        res = next((r for r in data if r.get('id') == reservation_id), None)
+        passed = res and res.get('status') == 'checked_in' and 'checked_in_at' in res and res.get('table_id') == 't1'
+        results.append(log_test("Reservation status is 'checked_in'", passed, 
+                               f"Status: {res.get('status') if res else 'N/A'}, Table: {res.get('table_id') if res else 'N/A'}"))
+    except Exception as e:
+        results.append(log_test("Verify reservation checked_in", False, str(e)))
+    
+    # 4.5: Verify table t1 is occupied
+    try:
+        resp = requests.get(f"{BASE_URL}/tables/t1", headers=HEADERS_ADMIN)
+        data = resp.json()
+        passed = data.get('status') == 'occupied'
+        results.append(log_test("Table t1 status is 'occupied'", passed, 
+                               f"Status: {data.get('status')}"))
+    except Exception as e:
+        results.append(log_test("Verify t1 occupied", False, str(e)))
+    
+    # 4.6: Try check-in again → 409
+    try:
+        resp = requests.post(f"{BASE_URL}/reservations/{reservation_id}/checkin", 
+                            headers=HEADERS_ADMIN, 
+                            json={"table_id": "t1"})
+        passed = resp.status_code == 409
+        results.append(log_test("Second check-in returns 409", passed, 
+                               f"Status: {resp.status_code}"))
+    except Exception as e:
+        results.append(log_test("Second check-in", False, str(e)))
+    
+    # 4.7: Test check-in without table_id (should fail if reservation has no preassigned table)
+    # First create another reservation without table_id
+    try:
+        res_data2 = {
             "date": "2099-12-31",
+            "time": "20:00",
+            "guests": 4,
+            "name": "Vytautas Žemaitis",
+            "phone": "+37062345678"
+        }
+        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data2)
+        res_id2 = resp.json().get('id')
+        
+        # Try check-in without table_id
+        resp = requests.post(f"{BASE_URL}/reservations/{res_id2}/checkin", 
+                            headers=HEADERS_ADMIN, 
+                            json={})
+        passed = resp.status_code == 400
+        results.append(log_test("Check-in without table_id returns 400", passed, 
+                               f"Status: {resp.status_code}"))
+    except Exception as e:
+        results.append(log_test("Check-in without table_id", False, str(e)))
+    
+    # 4.8: Cleanup
+    cleanup_table('t1')
+    results.append(log_test("Cleanup t1", True))
+    
+    return all(results)
+
+# ============================================================
+# TEST 5: Bill + pay flow
+# ============================================================
+def test_bill_pay_flow():
+    print("\n=== TEST 5: Bill + pay flow ===")
+    results = []
+    cleanup_table('t8')
+    
+    # 5.1: Walk-in t8
+    try:
+        resp = requests.post(f"{BASE_URL}/tables/t8/walkin", 
+                            headers=HEADERS_ADMIN, 
+                            json={"guests": 2, "customer_name": "Rūta Balčiūnaitė"})
+        passed = resp.status_code == 200
+        results.append(log_test("Walk-in t8", passed, f"Status: {resp.status_code}"))
+    except Exception as e:
+        results.append(log_test("Walk-in t8", False, str(e)))
+        return False
+    
+    # 5.2: Place 2 orders totaling ~€40
+    order_ids = []
+    try:
+        # Order 1: 2x Cepelinai (€14.50 each) = €29.00
+        order1 = {
+            "items": [
+                {"id": "cepelinai", "name": "Cepelinai", "price": 14.50, "quantity": 2}
+            ],
+            "table_id": "t8",
+            "customer": {"name": "Rūta Balčiūnaitė"}
+        }
+        resp1 = requests.post(f"{BASE_URL}/orders", headers=HEADERS_NO_AUTH, json=order1)
+        order_ids.append(resp1.json().get('id'))
+        
+        # Order 2: 1x Kibinai (€6.50) + 1x Rye Bread (€5.00) = €11.50
+        order2 = {
+            "items": [
+                {"id": "kibinai", "name": "Kibinai", "price": 6.50, "quantity": 1},
+                {"id": "rye-bread", "name": "Rye Bread", "price": 5.00, "quantity": 1}
+            ],
+            "table_id": "t8",
+            "customer": {"name": "Rūta Balčiūnaitė"}
+        }
+        resp2 = requests.post(f"{BASE_URL}/orders", headers=HEADERS_NO_AUTH, json=order2)
+        order_ids.append(resp2.json().get('id'))
+        
+        passed = resp1.status_code == 200 and resp2.status_code == 200
+        results.append(log_test("Place 2 orders on t8", passed, 
+                               f"Order 1: {resp1.status_code}, Order 2: {resp2.status_code}"))
+    except Exception as e:
+        results.append(log_test("Place orders", False, str(e)))
+    
+    # 5.3: GET /api/tables/t8/bill without admin → 401
+    try:
+        resp = requests.get(f"{BASE_URL}/tables/t8/bill", headers=HEADERS_NO_AUTH)
+        passed = resp.status_code == 401
+        results.append(log_test("GET bill without admin returns 401", passed, 
+                               f"Status: {resp.status_code}"))
+    except Exception as e:
+        results.append(log_test("GET bill no auth", False, str(e)))
+    
+    # 5.4: GET /api/tables/t8/bill with admin → 200, verify calculations
+    try:
+        resp = requests.get(f"{BASE_URL}/tables/t8/bill", headers=HEADERS_ADMIN)
+        data = resp.json()
+        
+        # Expected: subtotal = 29.00 + 11.50 = 40.50
+        # tax = 40.50 * 0.21 = 8.505 → 8.51
+        # total = 40.50 + 8.51 = 49.01
+        expected_subtotal = 40.50
+        expected_tax = 8.51
+        expected_total = 49.01
+        
+        passed = (
+            resp.status_code == 200 and
+            abs(data.get('subtotal', 0) - expected_subtotal) < 0.01 and
+            abs(data.get('tax', 0) - expected_tax) < 0.01 and
+            abs(data.get('total', 0) - expected_total) < 0.01 and
+            data.get('invoice_number', '').startswith('INV') and
+            'table' in data and
+            'session' in data
+        )
+        results.append(log_test("GET bill with admin returns correct calculations", passed, 
+                               f"Subtotal: {data.get('subtotal')}, Tax: {data.get('tax')}, Total: {data.get('total')}, Invoice: {data.get('invoice_number')}"))
+    except Exception as e:
+        results.append(log_test("GET bill with admin", False, str(e)))
+    
+    # 5.5: POST /api/tables/t8/pay with admin → 200, marks orders paid
+    try:
+        resp = requests.post(f"{BASE_URL}/tables/t8/pay", 
+                            headers=HEADERS_ADMIN, 
+                            json={"payment_method": "card"})
+        data = resp.json()
+        passed = resp.status_code == 200 and data.get('ok') == True
+        results.append(log_test("POST pay with admin", passed, 
+                               f"Status: {resp.status_code}, OK: {data.get('ok')}"))
+    except Exception as e:
+        results.append(log_test("POST pay", False, str(e)))
+    
+    # 5.6: Verify table status is 'cleaning'
+    try:
+        resp = requests.get(f"{BASE_URL}/tables/t8", headers=HEADERS_ADMIN)
+        data = resp.json()
+        passed = data.get('status') == 'cleaning'
+        results.append(log_test("Table t8 status is 'cleaning' after pay", passed, 
+                               f"Status: {data.get('status')}"))
+    except Exception as e:
+        results.append(log_test("Verify t8 cleaning", False, str(e)))
+    
+    # 5.7: Verify orders are paid and delivered
+    try:
+        all_paid = True
+        for oid in order_ids:
+            resp = requests.get(f"{BASE_URL}/orders/{oid}", headers=HEADERS_ADMIN)
+            order = resp.json()
+            if order.get('payment_status') != 'paid' or order.get('payment_method') != 'card' or order.get('status') != 'delivered':
+                all_paid = False
+                break
+        results.append(log_test("All orders marked paid and delivered", all_paid))
+    except Exception as e:
+        results.append(log_test("Verify orders paid", False, str(e)))
+    
+    # 5.8: Verify session is completed
+    try:
+        resp = requests.get(f"{BASE_URL}/tables/t8", headers=HEADERS_ADMIN)
+        data = resp.json()
+        # After pay, session should be completed, so active_session should be null
+        passed = data.get('active_session') is None
+        results.append(log_test("Session is completed (no active session)", passed, 
+                               f"Active session: {data.get('active_session')}"))
+    except Exception as e:
+        results.append(log_test("Verify session completed", False, str(e)))
+    
+    # 5.9: POST /api/tables/t8/cleaned → status='available'
+    try:
+        resp = requests.post(f"{BASE_URL}/tables/t8/cleaned", headers=HEADERS_ADMIN)
+        passed = resp.status_code == 200
+        
+        resp2 = requests.get(f"{BASE_URL}/tables/t8", headers=HEADERS_ADMIN)
+        data = resp2.json()
+        passed = passed and data.get('status') == 'available'
+        results.append(log_test("Table t8 cleaned and available", passed, 
+                               f"Status: {data.get('status')}"))
+    except Exception as e:
+        results.append(log_test("Clean t8", False, str(e)))
+    
+    return all(results)
+
+# ============================================================
+# TEST 6: Auto no-show + reserved status
+# ============================================================
+def test_auto_status_updates():
+    print("\n=== TEST 6: Auto no-show + reserved status ===")
+    results = []
+    cleanup_table('t4')
+    
+    # 6.1: Create future reservation (now + 1 hour)
+    future_res_id = None
+    try:
+        now = datetime.now()
+        future_time = now + timedelta(hours=1)
+        res_data = {
+            "date": future_time.strftime("%Y-%m-%d"),
+            "time": future_time.strftime("%H:%M"),
+            "guests": 2,
+            "name": "Darius Mockus",
+            "phone": "+37063456789"
+        }
+        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
+        data = resp.json()
+        future_res_id = data.get('id')
+        passed = resp.status_code == 200
+        results.append(log_test("Create future reservation (now+1h)", passed, 
+                               f"Status: {resp.status_code}, ID: {future_res_id}"))
+    except Exception as e:
+        results.append(log_test("Create future reservation", False, str(e)))
+    
+    # 6.2: Assign table to future reservation
+    try:
+        resp = requests.put(f"{BASE_URL}/reservations/{future_res_id}", 
+                           headers=HEADERS_ADMIN, 
+                           json={"table_id": "t4"})
+        passed = resp.status_code == 200
+        results.append(log_test("Assign table t4 to future reservation", passed, 
+                               f"Status: {resp.status_code}"))
+    except Exception as e:
+        results.append(log_test("Assign table", False, str(e)))
+    
+    # 6.3: GET /api/tables → t4 should be 'reserved' (auto-set by autoUpdateTableStatuses)
+    try:
+        resp = requests.get(f"{BASE_URL}/tables", headers=HEADERS_ADMIN)
+        data = resp.json()
+        t4 = next((t for t in data if t.get('id') == 't4'), None)
+        passed = t4 and t4.get('status') == 'reserved'
+        results.append(log_test("Table t4 auto-marked as 'reserved'", passed, 
+                               f"Status: {t4.get('status') if t4 else 'N/A'}"))
+    except Exception as e:
+        results.append(log_test("Verify t4 reserved", False, str(e)))
+    
+    # 6.4: Create past reservation (now - 2 hours) for no-show test
+    past_res_id = None
+    try:
+        now = datetime.now()
+        past_time = now - timedelta(hours=2)
+        res_data = {
+            "date": past_time.strftime("%Y-%m-%d"),
+            "time": past_time.strftime("%H:%M"),
+            "guests": 4,
+            "name": "Jurgita Navickaitė",
+            "phone": "+37064567890"
+        }
+        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
+        data = resp.json()
+        past_res_id = data.get('id')
+        passed = resp.status_code == 200
+        results.append(log_test("Create past reservation (now-2h)", passed, 
+                               f"Status: {resp.status_code}, ID: {past_res_id}"))
+        
+        # Assign a table to the past reservation so it can be checked by autoUpdateTableStatuses
+        if past_res_id:
+            requests.put(f"{BASE_URL}/reservations/{past_res_id}", 
+                        headers=HEADERS_ADMIN, 
+                        json={"table_id": "t3"})
+    except Exception as e:
+        results.append(log_test("Create past reservation", False, str(e)))
+    
+    # 6.5: Trigger autoUpdateTableStatuses by calling GET /api/tables
+    try:
+        resp = requests.get(f"{BASE_URL}/tables", headers=HEADERS_ADMIN)
+        passed = resp.status_code == 200
+        results.append(log_test("Trigger autoUpdateTableStatuses", passed))
+    except Exception as e:
+        results.append(log_test("Trigger auto update", False, str(e)))
+    
+    # 6.6: Verify past reservation is marked as 'no_show'
+    try:
+        resp = requests.get(f"{BASE_URL}/reservations", headers=HEADERS_ADMIN)
+        data = resp.json()
+        past_res = next((r for r in data if r.get('id') == past_res_id), None)
+        passed = past_res and past_res.get('status') == 'no_show' and 'no_show_at' in past_res
+        results.append(log_test("Past reservation auto-marked as 'no_show'", passed, 
+                               f"Status: {past_res.get('status') if past_res else 'N/A'}, Has no_show_at: {'no_show_at' in past_res if past_res else False}"))
+    except Exception as e:
+        results.append(log_test("Verify no_show", False, str(e)))
+    
+    # Cleanup: cancel future reservation to free t4
+    try:
+        requests.put(f"{BASE_URL}/reservations/{future_res_id}", 
+                    headers=HEADERS_ADMIN, 
+                    json={"status": "cancelled"})
+    except:
+        pass
+    
+    return all(results)
+
+# ============================================================
+# TEST 7: Reservation status updates
+# ============================================================
+def test_reservation_status_updates():
+    print("\n=== TEST 7: Reservation status updates ===")
+    results = []
+    
+    # 7.1: Create a test reservation
+    res_id = None
+    try:
+        res_data = {
+            "date": "2099-12-25",
+            "time": "18:00",
+            "guests": 6,
+            "name": "Audrius Stankevičius",
+            "phone": "+37065678901"
+        }
+        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
+        data = resp.json()
+        res_id = data.get('id')
+        passed = resp.status_code == 200
+        results.append(log_test("Create test reservation", passed, 
+                               f"Status: {resp.status_code}, ID: {res_id}"))
+    except Exception as e:
+        results.append(log_test("Create reservation", False, str(e)))
+        return False
+    
+    # 7.2: PUT without admin → 401
+    try:
+        resp = requests.put(f"{BASE_URL}/reservations/{res_id}", 
+                           headers=HEADERS_NO_AUTH, 
+                           json={"status": "cancelled"})
+        passed = resp.status_code == 401
+        results.append(log_test("PUT reservation without admin returns 401", passed, 
+                               f"Status: {resp.status_code}"))
+    except Exception as e:
+        results.append(log_test("PUT no auth", False, str(e)))
+    
+    # 7.3: PUT status='cancelled' with admin → 200
+    try:
+        resp = requests.put(f"{BASE_URL}/reservations/{res_id}", 
+                           headers=HEADERS_ADMIN, 
+                           json={"status": "cancelled"})
+        data = resp.json()
+        passed = resp.status_code == 200 and data.get('status') == 'cancelled'
+        results.append(log_test("PUT status='cancelled'", passed, 
+                               f"Status: {resp.status_code}, New status: {data.get('status')}"))
+    except Exception as e:
+        results.append(log_test("PUT cancelled", False, str(e)))
+    
+    # 7.4: Create another reservation for no_show test
+    res_id2 = None
+    try:
+        res_data = {
+            "date": "2099-12-26",
             "time": "19:00",
-            "guests": 2
+            "guests": 3,
+            "name": "Laima Žukauskas",
+            "phone": "+37066789012"
         }
-        
-        response = requests.post(f"{BASE_URL}/reservations", json=reservation_data, headers=HEADERS, timeout=10)
-        print(f"POST reservation status: {response.status_code}")
-        
-        if response.status_code == 200:
-            reservation = response.json()
-            reservation_id = reservation.get('id')
-            confirmation = reservation.get('confirmation')
-            
-            print(f"Reservation ID: {reservation_id}")
-            print(f"Confirmation: {confirmation}")
-            
-            if confirmation:
-                log_test("Reservation has confirmation field", True, f"Confirmation: {confirmation}")
-            else:
-                log_test("Reservation has confirmation field", False)
-            
-            # Test GET availability
-            response = requests.get(f"{BASE_URL}/reservations/availability?date=2099-12-31", timeout=10)
-            print(f"GET availability status: {response.status_code}")
-            
-            if response.status_code == 200:
-                availability = response.json()
-                slots = availability.get('slots', [])
-                slot_19 = next((s for s in slots if s.get('time') == '19:00'), None)
-                
-                if slot_19:
-                    available = slot_19.get('available')
-                    print(f"19:00 slot available: {available}")
-                    if available == 9:
-                        log_test("Availability shows 9 tables for 19:00", True)
-                    else:
-                        log_test("Availability shows 9 tables for 19:00", False, f"Got {available}")
-                else:
-                    log_test("Availability includes 19:00 slot", False)
-            else:
-                log_test("GET availability", False, f"Status {response.status_code}")
-        else:
-            log_test("POST reservation", False, f"Status {response.status_code}: {response.text}")
-        
-        # Test GET reservations without token
-        response = requests.get(f"{BASE_URL}/reservations", headers=HEADERS, timeout=10)
-        print(f"GET reservations without token status: {response.status_code}")
-        
-        if response.status_code == 401:
-            log_test("GET reservations without token returns 401", True)
-        else:
-            log_test("GET reservations without token returns 401", False, f"Got {response.status_code}")
-        
-        # Test GET reservations with token
-        response = requests.get(f"{BASE_URL}/reservations", headers=ADMIN_HEADERS, timeout=10)
-        print(f"GET reservations with token status: {response.status_code}")
-        
-        if response.status_code == 200:
-            reservations = response.json()
-            log_test("GET reservations with token works", True, f"Found {len(reservations)} reservations")
-        else:
-            log_test("GET reservations with token", False, f"Status {response.status_code}")
-        
-        # Test PUT reservation status
-        if reservation_id:
-            update_data = {"status": "cancelled"}
-            response = requests.put(f"{BASE_URL}/reservations/{reservation_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
-            print(f"PUT reservation status: {response.status_code}")
-            
-            if response.status_code == 200:
-                updated_res = response.json()
-                if updated_res.get('status') == 'cancelled':
-                    log_test("PUT reservation status works", True, f"Status: {updated_res.get('status')}")
-                else:
-                    log_test("PUT reservation status works", False, f"Expected 'cancelled', got {updated_res.get('status')}")
-            else:
-                log_test("PUT reservation status", False, f"Status {response.status_code}")
+        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
+        res_id2 = resp.json().get('id')
+        passed = resp.status_code == 200
+        results.append(log_test("Create second reservation", passed))
     except Exception as e:
-        log_test("Reservations API", False, f"Exception: {str(e)}")
-
-# ============================================================================
-# TEST 7: Double-booking Prevention
-# ============================================================================
-def test_double_booking():
-    """Test reservation double-booking prevention"""
-    print("\n" + "="*80)
-    print("TEST 7: Double-booking Prevention")
-    print("="*80)
+        results.append(log_test("Create second reservation", False, str(e)))
     
+    # 7.5: PUT status='no_show' → sets no_show_at
     try:
-        # Create 10 reservations for the same slot
-        test_date = "2099-12-30"
-        test_time = "20:00"
-        
-        print(f"Creating 10 reservations for {test_date} at {test_time}...")
-        
-        for i in range(10):
-            reservation_data = {
-                "name": f"Test User {i+1}",
-                "phone": f"+3706111111{i:02d}",
-                "date": test_date,
-                "time": test_time,
-                "guests": 2
-            }
-            response = requests.post(f"{BASE_URL}/reservations", json=reservation_data, headers=HEADERS, timeout=10)
-            if response.status_code != 200:
-                log_test(f"Create reservation {i+1}/10", False, f"Status {response.status_code}")
-                return
-        
-        log_test("Create 10 reservations for same slot", True)
-        
-        # Try to create 11th reservation (should fail with 409)
-        reservation_data = {
-            "name": "Test User 11",
-            "phone": "+37061111110",
-            "date": test_date,
-            "time": test_time,
-            "guests": 2
+        resp = requests.put(f"{BASE_URL}/reservations/{res_id2}", 
+                           headers=HEADERS_ADMIN, 
+                           json={"status": "no_show"})
+        data = resp.json()
+        passed = resp.status_code == 200 and data.get('status') == 'no_show' and 'no_show_at' in data
+        results.append(log_test("PUT status='no_show' sets no_show_at", passed, 
+                               f"Status: {data.get('status')}, Has no_show_at: {'no_show_at' in data}"))
+    except Exception as e:
+        results.append(log_test("PUT no_show", False, str(e)))
+    
+    # 7.6: Create third reservation for completed test
+    res_id3 = None
+    try:
+        res_data = {
+            "date": "2099-12-27",
+            "time": "20:00",
+            "guests": 5,
+            "name": "Mindaugas Rimkus",
+            "phone": "+37067890123"
         }
-        response = requests.post(f"{BASE_URL}/reservations", json=reservation_data, headers=HEADERS, timeout=10)
-        print(f"11th reservation status: {response.status_code}")
-        
-        if response.status_code == 409:
-            error_data = response.json()
-            error_msg = error_data.get('error', '')
-            print(f"Error message: {error_msg}")
-            
-            if 'fully booked' in error_msg.lower() or 'slot fully booked' in error_msg.lower():
-                log_test("11th reservation returns 409 with 'fully booked' error", True)
-            else:
-                log_test("11th reservation returns 409 with 'fully booked' error", False, f"Got: {error_msg}")
-        else:
-            log_test("11th reservation returns 409", False, f"Got {response.status_code}")
+        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
+        res_id3 = resp.json().get('id')
+        passed = resp.status_code == 200
+        results.append(log_test("Create third reservation", passed))
     except Exception as e:
-        log_test("Double-booking prevention", False, f"Exception: {str(e)}")
-
-# ============================================================================
-# TEST 8: Admin Login
-# ============================================================================
-def test_admin_login():
-    """Test POST /api/admin/login"""
-    print("\n" + "="*80)
-    print("TEST 8: Admin Login")
-    print("="*80)
+        results.append(log_test("Create third reservation", False, str(e)))
     
+    # 7.7: PUT status='completed' → sets completed_at
     try:
-        # Test with wrong password
-        login_data = {"password": "wrong"}
-        response = requests.post(f"{BASE_URL}/admin/login", json=login_data, headers=HEADERS, timeout=10)
-        print(f"Login with wrong password status: {response.status_code}")
-        
-        if response.status_code == 401:
-            log_test("Login with wrong password returns 401", True)
-        else:
-            log_test("Login with wrong password returns 401", False, f"Got {response.status_code}")
-        
-        # Test with correct password
-        login_data = {"password": "admin123"}
-        response = requests.post(f"{BASE_URL}/admin/login", json=login_data, headers=HEADERS, timeout=10)
-        print(f"Login with correct password status: {response.status_code}")
-        
-        if response.status_code == 200:
-            result = response.json()
-            token = result.get('token')
-            print(f"Token: {token}")
-            
-            if token == "admin123":
-                log_test("Login with correct password returns token", True, f"Token: {token}")
-            else:
-                log_test("Login with correct password returns token", False, f"Expected 'admin123', got {token}")
-        else:
-            log_test("Login with correct password", False, f"Status {response.status_code}")
+        resp = requests.put(f"{BASE_URL}/reservations/{res_id3}", 
+                           headers=HEADERS_ADMIN, 
+                           json={"status": "completed"})
+        data = resp.json()
+        passed = resp.status_code == 200 and data.get('status') == 'completed' and 'completed_at' in data
+        results.append(log_test("PUT status='completed' sets completed_at", passed, 
+                               f"Status: {data.get('status')}, Has completed_at: {'completed_at' in data}"))
     except Exception as e:
-        log_test("Admin login", False, f"Exception: {str(e)}")
-
-# ============================================================================
-# TEST 9: Admin Analytics
-# ============================================================================
-def test_admin_analytics():
-    """Test GET /api/admin/analytics"""
-    print("\n" + "="*80)
-    print("TEST 9: Admin Analytics")
-    print("="*80)
+        results.append(log_test("PUT completed", False, str(e)))
     
-    try:
-        # First create an order to ensure non-zero data
-        order_data = {
-            "items": [
-                {
-                    "id": "cepelinai",
-                    "name": "Cepelinai",
-                    "price": 14.50,
-                    "quantity": 1
-                }
-            ],
-            "type": "pickup",
-            "customer": {
-                "name": "Analytics Test",
-                "phone": "+37061234567"
-            },
-            "payment_method": "cash"
-        }
-        requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS, timeout=10)
-        
-        # Get analytics
-        response = requests.get(f"{BASE_URL}/admin/analytics", headers=ADMIN_HEADERS, timeout=10)
-        print(f"GET analytics status: {response.status_code}")
-        
-        if response.status_code == 200:
-            analytics = response.json()
-            print(f"Analytics: {json.dumps(analytics, indent=2)}")
-            
-            required_fields = ['total_revenue', 'today_revenue', 'total_orders', 'today_orders', 'avg_order_value', 'top_dishes']
-            
-            missing_fields = [f for f in required_fields if f not in analytics]
-            if missing_fields:
-                log_test("Analytics has all required fields", False, f"Missing: {missing_fields}")
-            else:
-                log_test("Analytics has all required fields", True)
-            
-            # Verify types
-            if isinstance(analytics.get('total_revenue'), (int, float)):
-                log_test("Analytics total_revenue is number", True, f"€{analytics.get('total_revenue')}")
-            else:
-                log_test("Analytics total_revenue is number", False, f"Got {type(analytics.get('total_revenue'))}")
-            
-            if isinstance(analytics.get('avg_order_value'), (int, float)):
-                log_test("Analytics avg_order_value is number", True, f"€{analytics.get('avg_order_value')}")
-            else:
-                log_test("Analytics avg_order_value is number", False, f"Got {type(analytics.get('avg_order_value'))}")
-            
-            if isinstance(analytics.get('top_dishes'), list):
-                log_test("Analytics top_dishes is array", True, f"Count: {len(analytics.get('top_dishes'))}")
-            else:
-                log_test("Analytics top_dishes is array", False, f"Got {type(analytics.get('top_dishes'))}")
-        else:
-            log_test("GET analytics", False, f"Status {response.status_code}: {response.text}")
-    except Exception as e:
-        log_test("Admin analytics", False, f"Exception: {str(e)}")
+    return all(results)
 
-# ============================================================================
-# TEST 10: Newsletter
-# ============================================================================
-def test_newsletter():
-    """Test POST /api/newsletter"""
-    print("\n" + "="*80)
-    print("TEST 10: Newsletter")
-    print("="*80)
-    
-    try:
-        # Test with email
-        newsletter_data = {"email": "test@test.com"}
-        response = requests.post(f"{BASE_URL}/newsletter", json=newsletter_data, headers=HEADERS, timeout=10)
-        print(f"POST newsletter with email status: {response.status_code}")
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get('ok') == True:
-                log_test("Newsletter with email returns ok:true", True)
-            else:
-                log_test("Newsletter with email returns ok:true", False, f"Got: {result}")
-        else:
-            log_test("Newsletter with email", False, f"Status {response.status_code}")
-        
-        # Test without email
-        response = requests.post(f"{BASE_URL}/newsletter", json={}, headers=HEADERS, timeout=10)
-        print(f"POST newsletter without email status: {response.status_code}")
-        
-        if response.status_code == 400:
-            log_test("Newsletter without email returns 400", True)
-        else:
-            log_test("Newsletter without email returns 400", False, f"Got {response.status_code}")
-    except Exception as e:
-        log_test("Newsletter", False, f"Exception: {str(e)}")
-
-# ============================================================================
-# TEST 11: Kitchen Orders Endpoint
-# ============================================================================
-def test_kitchen_orders():
-    """Test GET /api/kitchen/orders - filtering and sorting"""
-    print("\n" + "="*80)
-    print("TEST 11: Kitchen Orders Endpoint")
-    print("="*80)
-    
-    try:
-        # Test without admin token (should fail)
-        response = requests.get(f"{BASE_URL}/kitchen/orders", headers=HEADERS, timeout=10)
-        print(f"GET kitchen/orders without token status: {response.status_code}")
-        
-        if response.status_code == 401:
-            log_test("Kitchen orders without token returns 401", True)
-        else:
-            log_test("Kitchen orders without token returns 401", False, f"Got {response.status_code}")
-        
-        # Create 3 test orders
-        print("\nCreating 3 test orders...")
-        order_ids = []
-        
-        for i in range(3):
-            order_data = {
-                "items": [
-                    {
-                        "id": "cepelinai",
-                        "name": "Cepelinai",
-                        "price": 14.50,
-                        "quantity": 1
-                    }
-                ],
-                "type": "delivery",
-                "customer": {
-                    "name": f"Kitchen Test {i+1}",
-                    "phone": f"+3706999999{i}"
-                },
-                "payment_method": "cash"
-            }
-            response = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS, timeout=10)
-            if response.status_code == 200:
-                order = response.json()
-                order_ids.append(order.get('id'))
-                print(f"Created order {i+1}: {order.get('id')}")
-            else:
-                log_test(f"Create test order {i+1}", False, f"Status {response.status_code}")
-                return
-        
-        log_test("Create 3 test orders", True, f"IDs: {order_ids}")
-        
-        # Mark first order as 'delivered' (should be excluded from kitchen view)
-        if order_ids:
-            update_data = {"status": "delivered"}
-            response = requests.put(f"{BASE_URL}/orders/{order_ids[0]}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
-            print(f"Mark order 1 as delivered status: {response.status_code}")
-            
-            if response.status_code == 200:
-                log_test("Mark order as delivered", True)
-            else:
-                log_test("Mark order as delivered", False, f"Status {response.status_code}")
-        
-        # Test GET kitchen/orders with admin token
-        response = requests.get(f"{BASE_URL}/kitchen/orders", headers=ADMIN_HEADERS, timeout=10)
-        print(f"GET kitchen/orders with token status: {response.status_code}")
-        
-        if response.status_code == 200:
-            kitchen_orders = response.json()
-            print(f"Kitchen orders count: {len(kitchen_orders)}")
-            
-            log_test("Kitchen orders with token returns 200", True, f"Found {len(kitchen_orders)} orders")
-            
-            # Verify it's an array
-            if not isinstance(kitchen_orders, list):
-                log_test("Kitchen orders returns array", False, f"Got {type(kitchen_orders)}")
-            else:
-                log_test("Kitchen orders returns array", True)
-            
-            # Verify only active orders (received/preparing/ready) are returned
-            # The delivered order should NOT be in the list
-            has_delivered = any(o.get('id') == order_ids[0] for o in kitchen_orders)
-            if has_delivered:
-                log_test("Kitchen orders excludes delivered orders", False, "Delivered order found in results")
-            else:
-                log_test("Kitchen orders excludes delivered orders", True)
-            
-            # Verify only received/preparing/ready statuses
-            invalid_statuses = [o.get('status') for o in kitchen_orders if o.get('status') not in ['received', 'preparing', 'ready']]
-            if invalid_statuses:
-                log_test("Kitchen orders only includes active statuses", False, f"Found: {invalid_statuses}")
-            else:
-                log_test("Kitchen orders only includes active statuses", True)
-            
-            # Test sorting: priority orders first, then by created_at ascending
-            # Set priority on one order
-            if len(order_ids) >= 2:
-                priority_data = {"priority": True}
-                response = requests.put(f"{BASE_URL}/orders/{order_ids[1]}", json=priority_data, headers=ADMIN_HEADERS, timeout=10)
-                print(f"Set priority on order 2 status: {response.status_code}")
-                
-                # Fetch kitchen orders again
-                response = requests.get(f"{BASE_URL}/kitchen/orders", headers=ADMIN_HEADERS, timeout=10)
-                if response.status_code == 200:
-                    kitchen_orders = response.json()
-                    
-                    # Find our priority order
-                    priority_order_index = next((i for i, o in enumerate(kitchen_orders) if o.get('id') == order_ids[1]), None)
-                    
-                    if priority_order_index is not None:
-                        # Priority order should be first (or among first if multiple priority orders)
-                        if priority_order_index == 0 or kitchen_orders[0].get('priority') == True:
-                            log_test("Kitchen orders sorts priority first", True, f"Priority order at index {priority_order_index}")
-                        else:
-                            log_test("Kitchen orders sorts priority first", False, f"Priority order at index {priority_order_index}, expected 0 or first")
-                    else:
-                        log_test("Kitchen orders includes priority order", False, "Priority order not found")
-                    
-                    # Verify created_at ascending within same priority
-                    non_priority = [o for o in kitchen_orders if not o.get('priority')]
-                    if len(non_priority) >= 2:
-                        dates = [o.get('created_at') for o in non_priority]
-                        is_ascending = dates == sorted(dates)
-                        log_test("Kitchen orders sorts by created_at ascending", is_ascending, f"Dates: {dates[:3]}")
-                    else:
-                        log_test("Kitchen orders sorts by created_at ascending", True, "Not enough non-priority orders to verify")
-        else:
-            log_test("Kitchen orders with token", False, f"Status {response.status_code}: {response.text}")
-    except Exception as e:
-        log_test("Kitchen orders endpoint", False, f"Exception: {str(e)}")
-
-# ============================================================================
-# TEST 12: Order Status Timestamps + Priority Flag
-# ============================================================================
-def test_order_timestamps_priority():
-    """Test PUT /api/orders/:id - timestamps and priority flag"""
-    print("\n" + "="*80)
-    print("TEST 12: Order Status Timestamps + Priority Flag")
-    print("="*80)
-    
-    try:
-        # Create a fresh order
-        order_data = {
-            "items": [
-                {
-                    "id": "cepelinai",
-                    "name": "Cepelinai",
-                    "price": 14.50,
-                    "quantity": 1
-                }
-            ],
-            "type": "pickup",
-            "customer": {
-                "name": "Timestamp Test",
-                "phone": "+37061234567"
-            },
-            "payment_method": "cash"
-        }
-        
-        response = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS, timeout=10)
-        print(f"Create test order status: {response.status_code}")
-        
-        if response.status_code != 200:
-            log_test("Create order for timestamp test", False, f"Status {response.status_code}")
-            return
-        
-        order = response.json()
-        order_id = order.get('id')
-        print(f"Test order ID: {order_id}")
-        log_test("Create order for timestamp test", True, f"ID: {order_id}")
-        
-        # Test PUT without admin token (should fail)
-        update_data = {"status": "preparing"}
-        response = requests.put(f"{BASE_URL}/orders/{order_id}", json=update_data, headers=HEADERS, timeout=10)
-        print(f"PUT order without token status: {response.status_code}")
-        
-        if response.status_code == 401:
-            log_test("PUT order without token returns 401", True)
-        else:
-            log_test("PUT order without token returns 401", False, f"Got {response.status_code}")
-        
-        # Test status='preparing' → should set accepted_at
-        update_data = {"status": "preparing"}
-        response = requests.put(f"{BASE_URL}/orders/{order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
-        print(f"PUT status=preparing status: {response.status_code}")
-        
-        if response.status_code == 200:
-            updated_order = response.json()
-            accepted_at = updated_order.get('accepted_at')
-            
-            if accepted_at:
-                log_test("PUT status=preparing sets accepted_at", True, f"accepted_at: {accepted_at}")
-            else:
-                log_test("PUT status=preparing sets accepted_at", False, "accepted_at field missing")
-        else:
-            log_test("PUT status=preparing", False, f"Status {response.status_code}")
-        
-        # Test status='ready' → should set ready_at
-        update_data = {"status": "ready"}
-        response = requests.put(f"{BASE_URL}/orders/{order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
-        print(f"PUT status=ready status: {response.status_code}")
-        
-        if response.status_code == 200:
-            updated_order = response.json()
-            ready_at = updated_order.get('ready_at')
-            
-            if ready_at:
-                log_test("PUT status=ready sets ready_at", True, f"ready_at: {ready_at}")
-            else:
-                log_test("PUT status=ready sets ready_at", False, "ready_at field missing")
-        else:
-            log_test("PUT status=ready", False, f"Status {response.status_code}")
-        
-        # Test status='out' → should set out_at
-        update_data = {"status": "out"}
-        response = requests.put(f"{BASE_URL}/orders/{order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
-        print(f"PUT status=out status: {response.status_code}")
-        
-        if response.status_code == 200:
-            updated_order = response.json()
-            out_at = updated_order.get('out_at')
-            
-            if out_at:
-                log_test("PUT status=out sets out_at", True, f"out_at: {out_at}")
-            else:
-                log_test("PUT status=out sets out_at", False, "out_at field missing")
-        else:
-            log_test("PUT status=out", False, f"Status {response.status_code}")
-        
-        # Test status='delivered' → should set delivered_at
-        update_data = {"status": "delivered"}
-        response = requests.put(f"{BASE_URL}/orders/{order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
-        print(f"PUT status=delivered status: {response.status_code}")
-        
-        if response.status_code == 200:
-            updated_order = response.json()
-            delivered_at = updated_order.get('delivered_at')
-            
-            if delivered_at:
-                log_test("PUT status=delivered sets delivered_at", True, f"delivered_at: {delivered_at}")
-            else:
-                log_test("PUT status=delivered sets delivered_at", False, "delivered_at field missing")
-        else:
-            log_test("PUT status=delivered", False, f"Status {response.status_code}")
-        
-        # Create another order for priority testing
-        response = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS, timeout=10)
-        if response.status_code == 200:
-            priority_order = response.json()
-            priority_order_id = priority_order.get('id')
-            print(f"Priority test order ID: {priority_order_id}")
-            
-            # Test priority=true
-            update_data = {"priority": True}
-            response = requests.put(f"{BASE_URL}/orders/{priority_order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
-            print(f"PUT priority=true status: {response.status_code}")
-            
-            if response.status_code == 200:
-                updated_order = response.json()
-                priority = updated_order.get('priority')
-                
-                if priority == True:
-                    log_test("PUT priority=true sets priority field", True, f"priority: {priority}")
-                else:
-                    log_test("PUT priority=true sets priority field", False, f"Expected True, got {priority}")
-            else:
-                log_test("PUT priority=true", False, f"Status {response.status_code}")
-            
-            # Test priority=false
-            update_data = {"priority": False}
-            response = requests.put(f"{BASE_URL}/orders/{priority_order_id}", json=update_data, headers=ADMIN_HEADERS, timeout=10)
-            print(f"PUT priority=false status: {response.status_code}")
-            
-            if response.status_code == 200:
-                updated_order = response.json()
-                priority = updated_order.get('priority')
-                
-                if priority == False:
-                    log_test("PUT priority=false sets priority field", True, f"priority: {priority}")
-                else:
-                    log_test("PUT priority=false sets priority field", False, f"Expected False, got {priority}")
-            else:
-                log_test("PUT priority=false", False, f"Status {response.status_code}")
-        else:
-            log_test("Create order for priority test", False, f"Status {response.status_code}")
-    except Exception as e:
-        log_test("Order timestamps and priority", False, f"Exception: {str(e)}")
-
-# ============================================================================
+# ============================================================
 # MAIN TEST RUNNER
-# ============================================================================
+# ============================================================
 def main():
-    """Run all tests"""
-    print("\n" + "="*80)
-    print("AUKSTAITIJA RESTAURANT BACKEND API TEST SUITE")
-    print("="*80)
+    print("=" * 60)
+    print("AUKSTAITIJA RESTAURANT - TABLE LIFECYCLE BACKEND TESTS")
+    print("=" * 60)
     print(f"Base URL: {BASE_URL}")
     print(f"Admin Token: {ADMIN_TOKEN}")
-    print("="*80)
+    print("=" * 60)
     
-    # Run all tests
-    test_categories()
-    test_dishes_list()
-    test_dishes_by_id()
-    test_dishes_admin_crud()
-    test_orders()
-    test_reservations()
-    test_double_booking()
-    test_admin_login()
-    test_admin_analytics()
-    test_newsletter()
-    test_kitchen_orders()
-    test_order_timestamps_priority()
+    test_results = {
+        "Test 1: Tables list/detail endpoints": test_tables_endpoints(),
+        "Test 2: Walk-in seating": test_walkin_seating(),
+        "Test 3: QR/dine-in order auto-creates session": test_qr_order_session(),
+        "Test 4: Reservation check-in": test_reservation_checkin(),
+        "Test 5: Bill + pay flow": test_bill_pay_flow(),
+        "Test 6: Auto no-show + reserved status": test_auto_status_updates(),
+        "Test 7: Reservation status updates": test_reservation_status_updates(),
+    }
     
-    # Print summary
-    print_summary()
+    print("\n" + "=" * 60)
+    print("FINAL SUMMARY")
+    print("=" * 60)
+    
+    passed_count = sum(1 for v in test_results.values() if v)
+    total_count = len(test_results)
+    
+    for test_name, passed in test_results.items():
+        status = "✅ PASS" if passed else "❌ FAIL"
+        print(f"{status} - {test_name}")
+    
+    print("=" * 60)
+    print(f"TOTAL: {passed_count}/{total_count} tests passed ({passed_count*100//total_count}%)")
+    print("=" * 60)
+    
+    return passed_count == total_count
 
 if __name__ == "__main__":
-    main()
+    success = main()
+    exit(0 if success else 1)

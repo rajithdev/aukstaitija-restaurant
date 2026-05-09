@@ -254,12 +254,102 @@ backend:
     priority: "high"
     needs_retesting: false
     status_history:
+
+  - task: "Tables list/detail endpoints (GET /api/tables, GET /api/tables/:id, GET /api/tables/:id/info)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "GET /api/tables returns all 10 seeded tables enriched with active_session, active_orders count, upcoming_reservation. GET /api/tables/:id returns table + session + orders + upcoming_reservations. GET /api/tables/:id/info is PUBLIC (no auth) for QR code landing — returns id, number, capacity, section, status. PUT /api/tables/:id (admin) updates status/capacity/section/x/y/number."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - All scenarios verified: (1) GET /api/tables returns 10 tables with all required fields (id, number, capacity, status, section, x, y, active_session, active_orders, upcoming_reservation) ✅ (2) GET /api/tables/t1 returns detail with active_session and orders ✅ (3) GET /api/tables/nope returns 404 ✅ (4) GET /api/tables/t1/info PUBLIC endpoint works without auth, returns only public fields ✅ (5) PUT /api/tables/t1 without admin returns 401 ✅ (6) PUT /api/tables/t1 with admin updates status correctly ✅"
+
+  - task: "Walk-in seating (POST /api/tables/:id/walkin)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Admin-only. body { guests, customer_name? } creates an active table_session with origin='walkin' and sets table.status='occupied'. Returns 409 if table already has an active session."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - All scenarios verified: (1) POST without admin token returns 401 ✅ (2) POST with admin creates session with origin='walkin', session_status='active' ✅ (3) Table status becomes 'occupied' after walk-in ✅ (4) Second walk-in on same table returns 409 ✅ (5) Close + cleaned flow works, table returns to 'available' ✅"
+
+  - task: "Reservation check-in (POST /api/reservations/:id/checkin)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Admin-only. body { table_id }. Creates session linked to reservation, updates reservation.status='checked_in' with checked_in_at, sets table.status='occupied'. Returns 409 if table has active session, 400 if no table_id."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - All scenarios verified: (1) Check-in without admin returns 401 ✅ (2) Check-in with admin creates session with origin='reservation' ✅ (3) Reservation status becomes 'checked_in' with checked_in_at timestamp and table_id set ✅ (4) Table status becomes 'occupied' ✅ (5) Second check-in returns 409 ✅ (6) Check-in without table_id returns 400 ✅"
+
+  - task: "Table close + cleaned + bill + pay flow"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "All admin-only. POST /api/tables/:id/close ends session + sets status=cleaning. POST /api/tables/:id/cleaned sets status=available. GET /api/tables/:id/bill computes subtotal + 21% VAT + total from session orders, returns invoice_number. POST /api/tables/:id/pay marks all session orders paid+delivered, closes session, sets status=cleaning, completes linked reservation."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - Complete bill+pay flow verified: (1) Walk-in creates session ✅ (2) Multiple orders placed on table ✅ (3) GET bill without admin returns 401 ✅ (4) GET bill with admin returns correct calculations: subtotal €40.50, tax €8.50 (21%), total €49.00, invoice_number starts with 'INV' ✅ (5) POST pay marks all orders as paid+delivered with correct payment_method ✅ (6) Table status becomes 'cleaning' after pay ✅ (7) Session completed (no active session) ✅ (8) POST cleaned returns table to 'available' ✅"
+
+  - task: "QR-based dine-in order auto-creates session + occupies table (POST /api/orders with table_id)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "POST /api/orders with body.table_id auto-creates a walk-in session if none exists, sets table.status=occupied, links the order to session_id and stores table_number on order. Order_type is set to 'dine_in'."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - QR order flow verified: (1) POST /api/orders with table_id auto-creates session with origin='qr_order' ✅ (2) Order has order_type='dine_in', table_id, table_number, session_id, type='dine-in' ✅ (3) Table status becomes 'occupied' ✅ (4) Second order on same table reuses existing session (same session_id) ✅"
+
+  - task: "Reservation status upgrades (PUT /api/reservations/:id) + auto no-show"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "PUT /api/reservations/:id now accepts {status, table_id}. Status can be pending/confirmed/checked_in/completed/no_show/cancelled. Sets no_show_at when status=no_show, completed_at when completed. autoUpdateTableStatuses() runs on GET /api/tables and auto-marks reservations as no_show if their date+time is more than 30 min in the past and they were not checked in. Tables with assigned reservation in next 2hrs are auto-marked 'reserved'."
         - working: "NA"
           agent: "main"
           comment: "PUT /api/orders/:id now sets accepted_at when status=preparing, ready_at when status=ready, out_at when status=out, delivered_at when status=delivered. Also accepts {priority: true|false} flag for urgent orders. Used by Kitchen Dashboard."
         - working: true
           agent: "testing"
           comment: "✅ PASS - All timestamp and priority scenarios verified: (1) PUT without admin token returns 401 ✅ (2) PUT status='preparing' sets accepted_at field ✅ (3) PUT status='ready' sets ready_at field ✅ (4) PUT status='out' sets out_at field ✅ (5) PUT status='delivered' sets delivered_at field ✅ (6) PUT priority=true sets priority to true ✅ (7) PUT priority=false sets priority to false ✅"
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - Reservation status updates + auto no-show verified: (1) PUT without admin returns 401 ✅ (2) PUT status='cancelled' works ✅ (3) PUT status='no_show' sets no_show_at timestamp ✅ (4) PUT status='completed' sets completed_at timestamp ✅ (5) Future reservation (now+1h) with assigned table auto-marks table as 'reserved' ✅ (6) Past reservation (now-2h) with assigned table auto-marks as 'no_show' when GET /api/tables triggers autoUpdateTableStatuses ✅"
 
 frontend:
   - task: "Customer pages (home, menu, dish detail, cart, checkout, reservations, order tracking, admin)"
@@ -349,3 +439,58 @@ agent_communication:
       
       All scenarios from review request verified and working correctly.
       Backend implementation is complete and production-ready.
+  - agent: "testing"
+    message: |
+      ✅ TABLE LIFECYCLE BACKEND TESTS - ALL PASSED (7/7 - 100% success rate)
+      
+      Test Run 3 - Table Lifecycle Features:
+      
+      1. Tables list/detail endpoints (7 tests):
+         - GET /api/tables returns 10 tables with all required fields ✅
+         - GET /api/tables/:id returns detail with active_session and orders ✅
+         - GET /api/tables/nope returns 404 ✅
+         - GET /api/tables/:id/info PUBLIC endpoint works without auth ✅
+         - PUT /api/tables/:id without admin returns 401 ✅
+         - PUT /api/tables/:id with admin updates status correctly ✅
+      
+      2. Walk-in seating (6 tests):
+         - POST without admin returns 401 ✅
+         - POST with admin creates session with origin='walkin' ✅
+         - Table status becomes 'occupied' ✅
+         - Second walk-in returns 409 ✅
+         - Close + cleaned flow works ✅
+      
+      3. QR/dine-in order auto-creates session (4 tests):
+         - POST /api/orders with table_id auto-creates session with origin='qr_order' ✅
+         - Order has correct fields (order_type='dine_in', table_id, session_id) ✅
+         - Table status becomes 'occupied' ✅
+         - Second order reuses same session ✅
+      
+      4. Reservation check-in (8 tests):
+         - Check-in without admin returns 401 ✅
+         - Check-in with admin creates session with origin='reservation' ✅
+         - Reservation status becomes 'checked_in' with timestamp ✅
+         - Table status becomes 'occupied' ✅
+         - Second check-in returns 409 ✅
+         - Check-in without table_id returns 400 ✅
+      
+      5. Bill + pay flow (9 tests):
+         - GET bill without admin returns 401 ✅
+         - GET bill with admin returns correct calculations (subtotal €40.50, tax €8.50, total €49.00) ✅
+         - POST pay marks all orders as paid+delivered ✅
+         - Table status becomes 'cleaning' after pay ✅
+         - Session completed ✅
+         - POST cleaned returns table to 'available' ✅
+      
+      6. Auto no-show + reserved status (6 tests):
+         - Future reservation (now+1h) with assigned table auto-marks table as 'reserved' ✅
+         - Past reservation (now-2h) with assigned table auto-marks as 'no_show' ✅
+         - autoUpdateTableStatuses triggered by GET /api/tables ✅
+      
+      7. Reservation status updates (7 tests):
+         - PUT without admin returns 401 ✅
+         - PUT status='cancelled' works ✅
+         - PUT status='no_show' sets no_show_at timestamp ✅
+         - PUT status='completed' sets completed_at timestamp ✅
+      
+      All table lifecycle features working correctly. Backend is production-ready.

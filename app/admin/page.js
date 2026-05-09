@@ -116,6 +116,7 @@ function AdminPage() {
             <h1 className="font-serif text-4xl">{t('admin.title')}</h1>
           </div>
           <div className="flex gap-2">
+            <Link href="/admin/floor"><Button variant="outline"><LayoutDashboard className="h-4 w-4 mr-2" /> Floor Map</Button></Link>
             <Link href="/kitchen"><Button variant="outline"><ChefHat className="h-4 w-4 mr-2" /> Kitchen Live</Button></Link>
             <Button variant="outline" onClick={logout}><LogOut className="h-4 w-4 mr-2" /> Logout</Button>
           </div>
@@ -220,14 +221,35 @@ function AdminPage() {
             {reservations.map(r => (
               <Card key={r.id} className="p-4 flex flex-wrap justify-between gap-4">
                 <div>
-                  <p className="font-serif text-xl">{r.name} <span className="text-xs text-muted-foreground">#{r.confirmation}</span></p>
-                  <p className="text-sm">{r.date} • {r.time} • {r.guests} guests</p>
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="font-serif text-xl">{r.name}</p>
+                    <span className="text-xs text-muted-foreground">#{r.confirmation}</span>
+                    <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${
+                      r.status === 'confirmed' ? 'bg-blue-500/20 text-blue-600 dark:text-blue-400' :
+                      r.status === 'checked_in' ? 'bg-red-500/20 text-red-600 dark:text-red-400' :
+                      r.status === 'completed' ? 'bg-green-500/20 text-green-600 dark:text-green-400' :
+                      r.status === 'no_show' ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400' :
+                      r.status === 'cancelled' ? 'bg-gray-500/20 text-gray-500' :
+                      'bg-primary/20 text-primary'
+                    }`}>{r.status}</span>
+                  </div>
+                  <p className="text-sm">{r.date} · {r.time} · {r.guests} guests {r.table_id && <span className="text-primary">· Table {r.table_id.replace('t','')}</span>}</p>
                   <p className="text-xs text-muted-foreground">{r.phone} {r.email && ` · ${r.email}`}</p>
                   {r.special_requests && <p className="text-xs italic mt-1">"{r.special_requests}"</p>}
                 </div>
-                <select value={r.status} onChange={e => updateReservationStatus(r.id, e.target.value)} className="h-9 px-3 text-sm bg-background border border-border rounded-md">
-                  {['confirmed','seated','completed','cancelled','no-show'].map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
+                <div className="flex flex-wrap gap-2 items-center">
+                  {r.status === 'confirmed' && (
+                    <Link href="/admin/floor">
+                      <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white">Check-in →</Button>
+                    </Link>
+                  )}
+                  {r.status === 'confirmed' && (
+                    <Button size="sm" variant="outline" onClick={() => updateReservationStatus(r.id, 'no_show')}>Mark No-show</Button>
+                  )}
+                  {(r.status === 'confirmed' || r.status === 'pending') && (
+                    <Button size="sm" variant="outline" onClick={() => updateReservationStatus(r.id, 'cancelled')}>Cancel</Button>
+                  )}
+                </div>
               </Card>
             ))}
           </div>

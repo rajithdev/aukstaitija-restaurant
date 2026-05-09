@@ -11,7 +11,7 @@ import { Search, Plus, Flame, Leaf, WheatOff, Beef, Star, Clock } from 'lucide-r
 import { toast } from 'sonner'
 
 function MenuPage() {
-  const { t, lang, addToCart } = useApp()
+  const { t, lang, addToCart, tableId, tableNumber } = useApp()
   const [dishes, setDishes] = useState([])
   const [categories, setCategories] = useState([])
   const [search, setSearch] = useState('')
@@ -49,6 +49,12 @@ function MenuPage() {
         <p className="text-primary text-xs uppercase tracking-[0.4em] mb-3">Carte du Jour</p>
         <h1 className="font-serif text-5xl md:text-7xl mb-4">{t('menu.title')}</h1>
         <p className="text-muted-foreground text-lg max-w-xl mx-auto">{t('menu.subtitle')}</p>
+        {tableId && (
+          <div className="mt-6 inline-flex items-center gap-3 bg-primary/15 border border-primary/30 px-6 py-3 rounded-full">
+            <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+            <span className="text-sm">Dine-in at <strong className="font-serif text-lg">Table {tableNumber}</strong></span>
+          </div>
+        )}
       </section>
 
       {/* FILTERS */}
