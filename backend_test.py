@@ -1,785 +1,736 @@
 #!/usr/bin/env python3
 """
-Backend test suite for Aukstaitija Restaurant Table Lifecycle
-Tests all 7 scenarios from the review request
+Backend test for predictive courier dispatch feature
+Tests all scenarios from the review request
 """
 import requests
 import json
 from datetime import datetime, timedelta
 
 # Configuration
-BASE_URL = "https://277842d5-3eca-4a9e-bbec-aeb8b56bce5e.preview.emergentagent.com/api"
+BASE_URL = "http://localhost:3000/api"
 ADMIN_TOKEN = "admin123"
 HEADERS_ADMIN = {"x-admin-token": ADMIN_TOKEN, "Content-Type": "application/json"}
 HEADERS_NO_AUTH = {"Content-Type": "application/json"}
 
+# Test results tracking
+test_results = []
+pass_count = 0
+fail_count = 0
+
 def log_test(test_name, passed, details=""):
+    global pass_count, fail_count
     status = "✅ PASS" if passed else "❌ FAIL"
-    print(f"{status} - {test_name}")
+    if passed:
+        pass_count += 1
+    else:
+        fail_count += 1
+    result = f"{status} - {test_name}"
     if details:
-        print(f"  Details: {details}")
-    return passed
+        result += f"\n    Details: {details}"
+    print(result)
+    test_results.append({"test": test_name, "passed": passed, "details": details})
 
-def cleanup_table(table_id):
-    """Helper to reset table state: close session + mark cleaned"""
-    try:
-        requests.post(f"{BASE_URL}/tables/{table_id}/close", headers=HEADERS_ADMIN)
-        requests.post(f"{BASE_URL}/tables/{table_id}/cleaned", headers=HEADERS_ADMIN)
-    except:
-        pass
-
-# ============================================================
-# TEST 1: Tables list/detail endpoints
-# ============================================================
-def test_tables_endpoints():
-    print("\n=== TEST 1: Tables list/detail endpoints ===")
-    results = []
+def test_scenario_1_order_creation_prep_time():
+    """Scenario 1: Order creation stores prep_time_total"""
+    print("\n=== Scenario 1: Order creation stores prep_time_total ===")
     
-    # 1.1: GET /api/tables → 200, array length 10
     try:
-        resp = requests.get(f"{BASE_URL}/tables", headers=HEADERS_ADMIN)
-        data = resp.json()
-        passed = resp.status_code == 200 and isinstance(data, list) and len(data) == 10
-        results.append(log_test("GET /api/tables returns 10 tables", passed, 
-                               f"Status: {resp.status_code}, Count: {len(data) if isinstance(data, list) else 'N/A'}"))
+        # Get a dish
+        resp = requests.get(f"{BASE_URL}/dishes")
+        assert resp.status_code == 200, f"Failed to get dishes: {resp.status_code}"
+        dishes = resp.json()
+        assert len(dishes) > 0, "No dishes found"
+        dish = dishes[0]
+        dish_prep_time = dish.get('prep_time', 15)
+        log_test("1.1 - Get dish with prep_time", True, f"Dish: {dish['name']}, prep_time: {dish_prep_time}")
         
-        # Check fields
-        if passed and len(data) > 0:
-            t = data[0]
-            has_fields = all(k in t for k in ['id', 'number', 'capacity', 'status', 'section', 'x', 'y', 'active_session', 'active_orders', 'upcoming_reservation'])
-            results.append(log_test("Table has all required fields", has_fields, 
-                                   f"Fields: {list(t.keys())}"))
-    except Exception as e:
-        results.append(log_test("GET /api/tables", False, str(e)))
-    
-    # 1.2: GET /api/tables/t1 → 200, has active_session and orders
-    try:
-        resp = requests.get(f"{BASE_URL}/tables/t1", headers=HEADERS_ADMIN)
-        data = resp.json()
-        passed = resp.status_code == 200 and 'active_session' in data and 'orders' in data
-        results.append(log_test("GET /api/tables/t1 returns detail", passed, 
-                               f"Status: {resp.status_code}, Has active_session: {'active_session' in data}"))
-    except Exception as e:
-        results.append(log_test("GET /api/tables/t1", False, str(e)))
-    
-    # 1.3: GET /api/tables/nope → 404
-    try:
-        resp = requests.get(f"{BASE_URL}/tables/nope", headers=HEADERS_ADMIN)
-        passed = resp.status_code == 404
-        results.append(log_test("GET /api/tables/nope returns 404", passed, 
-                               f"Status: {resp.status_code}"))
-    except Exception as e:
-        results.append(log_test("GET /api/tables/nope", False, str(e)))
-    
-    # 1.4: GET /api/tables/t1/info → 200, PUBLIC (no auth)
-    try:
-        resp = requests.get(f"{BASE_URL}/tables/t1/info", headers=HEADERS_NO_AUTH)
-        data = resp.json()
-        passed = resp.status_code == 200 and all(k in data for k in ['id', 'number', 'capacity', 'section', 'status'])
-        results.append(log_test("GET /api/tables/t1/info (PUBLIC) works", passed, 
-                               f"Status: {resp.status_code}, Fields: {list(data.keys()) if isinstance(data, dict) else 'N/A'}"))
-    except Exception as e:
-        results.append(log_test("GET /api/tables/t1/info", False, str(e)))
-    
-    # 1.5: PUT /api/tables/t1 without admin → 401
-    try:
-        resp = requests.put(f"{BASE_URL}/tables/t1", 
-                           headers=HEADERS_NO_AUTH, 
-                           json={"status": "out_of_service"})
-        passed = resp.status_code == 401
-        results.append(log_test("PUT /api/tables/t1 without admin returns 401", passed, 
-                               f"Status: {resp.status_code}"))
-    except Exception as e:
-        results.append(log_test("PUT /api/tables/t1 no auth", False, str(e)))
-    
-    # 1.6: PUT /api/tables/t1 with admin → 200, status updated
-    try:
-        resp = requests.put(f"{BASE_URL}/tables/t1", 
-                           headers=HEADERS_ADMIN, 
-                           json={"status": "out_of_service"})
-        data = resp.json()
-        passed = resp.status_code == 200 and data.get('status') == 'out_of_service'
-        results.append(log_test("PUT /api/tables/t1 with admin updates status", passed, 
-                               f"Status: {resp.status_code}, New status: {data.get('status')}"))
+        # Get a delivery zone
+        resp = requests.get(f"{BASE_URL}/delivery-zones")
+        assert resp.status_code == 200, f"Failed to get delivery zones: {resp.status_code}"
+        zones = resp.json()
+        assert len(zones) > 0, "No delivery zones found"
+        zone = zones[0]
+        zone_eta = zone.get('eta_minutes', 30)
+        log_test("1.2 - Get delivery zone", True, f"Zone: {zone['name']}, eta_minutes: {zone_eta}")
         
-        # Reset back to available
-        requests.put(f"{BASE_URL}/tables/t1", headers=HEADERS_ADMIN, json={"status": "available"})
-    except Exception as e:
-        results.append(log_test("PUT /api/tables/t1 with admin", False, str(e)))
-    
-    return all(results)
-
-# ============================================================
-# TEST 2: Walk-in seating
-# ============================================================
-def test_walkin_seating():
-    print("\n=== TEST 2: Walk-in seating ===")
-    results = []
-    cleanup_table('t5')
-    
-    # 2.1: Without admin token → 401
-    try:
-        resp = requests.post(f"{BASE_URL}/tables/t5/walkin", 
-                            headers=HEADERS_NO_AUTH, 
-                            json={"guests": 4, "customer_name": "Petras Kazlauskas"})
-        passed = resp.status_code == 401
-        results.append(log_test("POST /api/tables/t5/walkin without admin returns 401", passed, 
-                               f"Status: {resp.status_code}"))
-    except Exception as e:
-        results.append(log_test("Walk-in without auth", False, str(e)))
-    
-    # 2.2: With admin token → 200, creates session
-    try:
-        resp = requests.post(f"{BASE_URL}/tables/t5/walkin", 
-                            headers=HEADERS_ADMIN, 
-                            json={"guests": 4, "customer_name": "Petras Kazlauskas"})
-        data = resp.json()
-        passed = resp.status_code == 200 and data.get('ok') == True and 'session' in data
-        session_data = data.get('session', {})
-        session_checks = (
-            session_data.get('session_status') == 'active' and
-            session_data.get('origin') == 'walkin' and
-            session_data.get('customer_name') == 'Petras Kazlauskas'
-        )
-        results.append(log_test("POST /api/tables/t5/walkin creates session", passed and session_checks, 
-                               f"Status: {resp.status_code}, Session status: {session_data.get('session_status')}, Origin: {session_data.get('origin')}"))
-    except Exception as e:
-        results.append(log_test("Walk-in with admin", False, str(e)))
-    
-    # 2.3: Verify table status is 'occupied'
-    try:
-        resp = requests.get(f"{BASE_URL}/tables/t5", headers=HEADERS_ADMIN)
-        data = resp.json()
-        passed = data.get('status') == 'occupied' and data.get('active_session') is not None
-        results.append(log_test("Table t5 status is 'occupied' after walk-in", passed, 
-                               f"Status: {data.get('status')}, Has session: {data.get('active_session') is not None}"))
-    except Exception as e:
-        results.append(log_test("Verify t5 occupied", False, str(e)))
-    
-    # 2.4: Try walk-in again on same table → 409
-    try:
-        resp = requests.post(f"{BASE_URL}/tables/t5/walkin", 
-                            headers=HEADERS_ADMIN, 
-                            json={"guests": 2, "customer_name": "Jonas Petraitis"})
-        passed = resp.status_code == 409
-        results.append(log_test("Second walk-in on t5 returns 409", passed, 
-                               f"Status: {resp.status_code}"))
-    except Exception as e:
-        results.append(log_test("Second walk-in", False, str(e)))
-    
-    # 2.5: Cleanup - close and clean
-    try:
-        resp1 = requests.post(f"{BASE_URL}/tables/t5/close", headers=HEADERS_ADMIN)
-        resp2 = requests.post(f"{BASE_URL}/tables/t5/cleaned", headers=HEADERS_ADMIN)
-        passed = resp1.status_code == 200 and resp2.status_code == 200
-        results.append(log_test("Cleanup t5 (close + cleaned)", passed, 
-                               f"Close: {resp1.status_code}, Cleaned: {resp2.status_code}"))
-        
-        # Verify available
-        resp = requests.get(f"{BASE_URL}/tables/t5", headers=HEADERS_ADMIN)
-        data = resp.json()
-        passed = data.get('status') == 'available'
-        results.append(log_test("Table t5 status is 'available' after cleanup", passed, 
-                               f"Status: {data.get('status')}"))
-    except Exception as e:
-        results.append(log_test("Cleanup t5", False, str(e)))
-    
-    return all(results)
-
-# ============================================================
-# TEST 3: QR/dine-in order auto-creates session
-# ============================================================
-def test_qr_order_session():
-    print("\n=== TEST 3: QR/dine-in order auto-creates session ===")
-    results = []
-    cleanup_table('t2')
-    
-    # 3.1: POST /api/orders with table_id → creates session, occupies table
-    try:
+        # Create delivery order
         order_data = {
+            "type": "delivery",
+            "delivery_zone_id": zone['id'],
+            "customer": {
+                "name": "Maria Petrauskas",
+                "phone": "+37060012345"
+            },
+            "address": {
+                "address": "Laisvės alėja 101",
+                "city": "Kaunas",
+                "zip": "44280"
+            },
             "items": [
-                {"id": "cepelinai", "name": "Cepelinai", "price": 14.5, "quantity": 1}
-            ],
-            "table_id": "t2",
-            "customer": {"name": "Gintarė Jankauskas"}
+                {
+                    "id": dish['id'],
+                    "name": dish['name'],
+                    "price": dish['price'],
+                    "quantity": 1
+                }
+            ]
         }
-        resp = requests.post(f"{BASE_URL}/orders", headers=HEADERS_NO_AUTH, json=order_data)
-        data = resp.json()
-        passed = (
-            resp.status_code == 200 and
-            data.get('order_type') == 'dine_in' and
-            data.get('table_id') == 't2' and
-            data.get('table_number') == 2 and
-            data.get('session_id') is not None and
-            data.get('type') == 'dine-in'
-        )
-        first_session_id = data.get('session_id')
-        results.append(log_test("POST /api/orders with table_id creates session", passed, 
-                               f"Status: {resp.status_code}, Order type: {data.get('order_type')}, Session ID: {first_session_id}"))
+        
+        resp = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS_NO_AUTH)
+        assert resp.status_code == 200, f"Failed to create order: {resp.status_code} - {resp.text}"
+        order = resp.json()
+        
+        # Verify prep_time_total
+        assert 'prep_time_total' in order, "prep_time_total not in order"
+        assert isinstance(order['prep_time_total'], (int, float)), f"prep_time_total is not a number: {type(order['prep_time_total'])}"
+        assert order['prep_time_total'] > 0, f"prep_time_total should be > 0, got {order['prep_time_total']}"
+        
+        # Verify initial state
+        assert order['delivery_status'] == 'pending', f"Expected delivery_status='pending', got '{order['delivery_status']}'"
+        assert order['courier_requested_at'] is None, f"Expected courier_requested_at=null, got {order['courier_requested_at']}"
+        assert order['courier_eta'] == zone_eta, f"Expected courier_eta={zone_eta}, got {order['courier_eta']}"
+        
+        log_test("1.3 - Order created with prep_time_total", True, 
+                f"prep_time_total={order['prep_time_total']} minutes, delivery_status=pending, courier_requested_at=null")
+        
+        return order['id']
+        
+    except AssertionError as e:
+        log_test("1 - Order creation stores prep_time_total", False, str(e))
+        return None
     except Exception as e:
-        results.append(log_test("QR order creates session", False, str(e)))
-        first_session_id = None
-    
-    # 3.2: Verify table t2 is occupied with session origin='qr_order'
-    try:
-        resp = requests.get(f"{BASE_URL}/tables/t2", headers=HEADERS_ADMIN)
-        data = resp.json()
-        session = data.get('active_session', {})
-        passed = (
-            data.get('status') == 'occupied' and
-            session.get('origin') == 'qr_order' and
-            len(data.get('orders', [])) > 0
-        )
-        results.append(log_test("Table t2 occupied with origin='qr_order'", passed, 
-                               f"Status: {data.get('status')}, Origin: {session.get('origin')}, Orders: {len(data.get('orders', []))}"))
-    except Exception as e:
-        results.append(log_test("Verify t2 occupied", False, str(e)))
-    
-    # 3.3: POST second order for same table → reuses session
-    try:
-        order_data2 = {
-            "items": [
-                {"id": "kibinai", "name": "Kibinai", "price": 6.5, "quantity": 2}
-            ],
-            "table_id": "t2",
-            "customer": {"name": "Gintarė Jankauskas"}
-        }
-        resp = requests.post(f"{BASE_URL}/orders", headers=HEADERS_NO_AUTH, json=order_data2)
-        data = resp.json()
-        second_session_id = data.get('session_id')
-        passed = (
-            resp.status_code == 200 and
-            second_session_id == first_session_id
-        )
-        results.append(log_test("Second order reuses same session", passed, 
-                               f"Status: {resp.status_code}, Same session: {second_session_id == first_session_id}"))
-    except Exception as e:
-        results.append(log_test("Second QR order", False, str(e)))
-    
-    # 3.4: Cleanup
-    cleanup_table('t2')
-    results.append(log_test("Cleanup t2", True))
-    
-    return all(results)
+        log_test("1 - Order creation stores prep_time_total", False, f"Exception: {str(e)}")
+        return None
 
-# ============================================================
-# TEST 4: Reservation check-in
-# ============================================================
-def test_reservation_checkin():
-    print("\n=== TEST 4: Reservation check-in ===")
-    results = []
-    cleanup_table('t1')
+def test_scenario_2_dispatch_during_preparing(order_id=None):
+    """Scenario 2: Dispatch during PREPARING (NEW behavior — predictive)"""
+    print("\n=== Scenario 2: Dispatch during PREPARING (predictive) ===")
     
-    # 4.1: Create a reservation
-    reservation_id = None
     try:
-        res_data = {
-            "date": "2099-12-30",
-            "time": "19:30",
-            "guests": 2,
-            "name": "Ona Petraitė",
-            "phone": "+37061234567"
-        }
-        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
-        data = resp.json()
-        reservation_id = data.get('id')
-        passed = resp.status_code == 200 and reservation_id is not None
-        results.append(log_test("Create reservation", passed, 
-                               f"Status: {resp.status_code}, ID: {reservation_id}"))
-    except Exception as e:
-        results.append(log_test("Create reservation", False, str(e)))
-        return False
-    
-    # 4.2: Check-in without admin → 401
-    try:
-        resp = requests.post(f"{BASE_URL}/reservations/{reservation_id}/checkin", 
-                            headers=HEADERS_NO_AUTH, 
-                            json={"table_id": "t1"})
-        passed = resp.status_code == 401
-        results.append(log_test("Check-in without admin returns 401", passed, 
-                               f"Status: {resp.status_code}"))
-    except Exception as e:
-        results.append(log_test("Check-in no auth", False, str(e)))
-    
-    # 4.3: Check-in with admin → 200, creates session
-    try:
-        resp = requests.post(f"{BASE_URL}/reservations/{reservation_id}/checkin", 
-                            headers=HEADERS_ADMIN, 
-                            json={"table_id": "t1"})
-        data = resp.json()
-        session = data.get('session', {})
-        passed = (
-            resp.status_code == 200 and
-            data.get('ok') == True and
-            session.get('origin') == 'reservation'
-        )
-        results.append(log_test("Check-in with admin creates session", passed, 
-                               f"Status: {resp.status_code}, Origin: {session.get('origin')}"))
-    except Exception as e:
-        results.append(log_test("Check-in with admin", False, str(e)))
-    
-    # 4.4: Verify reservation status is 'checked_in'
-    try:
-        resp = requests.get(f"{BASE_URL}/reservations", headers=HEADERS_ADMIN)
-        data = resp.json()
-        res = next((r for r in data if r.get('id') == reservation_id), None)
-        passed = res and res.get('status') == 'checked_in' and 'checked_in_at' in res and res.get('table_id') == 't1'
-        results.append(log_test("Reservation status is 'checked_in'", passed, 
-                               f"Status: {res.get('status') if res else 'N/A'}, Table: {res.get('table_id') if res else 'N/A'}"))
-    except Exception as e:
-        results.append(log_test("Verify reservation checked_in", False, str(e)))
-    
-    # 4.5: Verify table t1 is occupied
-    try:
-        resp = requests.get(f"{BASE_URL}/tables/t1", headers=HEADERS_ADMIN)
-        data = resp.json()
-        passed = data.get('status') == 'occupied'
-        results.append(log_test("Table t1 status is 'occupied'", passed, 
-                               f"Status: {data.get('status')}"))
-    except Exception as e:
-        results.append(log_test("Verify t1 occupied", False, str(e)))
-    
-    # 4.6: Try check-in again → 409
-    try:
-        resp = requests.post(f"{BASE_URL}/reservations/{reservation_id}/checkin", 
-                            headers=HEADERS_ADMIN, 
-                            json={"table_id": "t1"})
-        passed = resp.status_code == 409
-        results.append(log_test("Second check-in returns 409", passed, 
-                               f"Status: {resp.status_code}"))
-    except Exception as e:
-        results.append(log_test("Second check-in", False, str(e)))
-    
-    # 4.7: Test check-in without table_id (should fail if reservation has no preassigned table)
-    # First create another reservation without table_id
-    try:
-        res_data2 = {
-            "date": "2099-12-31",
-            "time": "20:00",
-            "guests": 4,
-            "name": "Vytautas Žemaitis",
-            "phone": "+37062345678"
-        }
-        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data2)
-        res_id2 = resp.json().get('id')
-        
-        # Try check-in without table_id
-        resp = requests.post(f"{BASE_URL}/reservations/{res_id2}/checkin", 
-                            headers=HEADERS_ADMIN, 
-                            json={})
-        passed = resp.status_code == 400
-        results.append(log_test("Check-in without table_id returns 400", passed, 
-                               f"Status: {resp.status_code}"))
-    except Exception as e:
-        results.append(log_test("Check-in without table_id", False, str(e)))
-    
-    # 4.8: Cleanup
-    cleanup_table('t1')
-    results.append(log_test("Cleanup t1", True))
-    
-    return all(results)
-
-# ============================================================
-# TEST 5: Bill + pay flow
-# ============================================================
-def test_bill_pay_flow():
-    print("\n=== TEST 5: Bill + pay flow ===")
-    results = []
-    cleanup_table('t8')
-    
-    # 5.1: Walk-in t8
-    try:
-        resp = requests.post(f"{BASE_URL}/tables/t8/walkin", 
-                            headers=HEADERS_ADMIN, 
-                            json={"guests": 2, "customer_name": "Rūta Balčiūnaitė"})
-        passed = resp.status_code == 200
-        results.append(log_test("Walk-in t8", passed, f"Status: {resp.status_code}"))
-    except Exception as e:
-        results.append(log_test("Walk-in t8", False, str(e)))
-        return False
-    
-    # 5.2: Place 2 orders totaling ~€40
-    order_ids = []
-    try:
-        # Order 1: 2x Cepelinai (€14.50 each) = €29.00
-        order1 = {
-            "items": [
-                {"id": "cepelinai", "name": "Cepelinai", "price": 14.50, "quantity": 2}
-            ],
-            "table_id": "t8",
-            "customer": {"name": "Rūta Balčiūnaitė"}
-        }
-        resp1 = requests.post(f"{BASE_URL}/orders", headers=HEADERS_NO_AUTH, json=order1)
-        order_ids.append(resp1.json().get('id'))
-        
-        # Order 2: 1x Kibinai (€6.50) + 1x Rye Bread (€5.00) = €11.50
-        order2 = {
-            "items": [
-                {"id": "kibinai", "name": "Kibinai", "price": 6.50, "quantity": 1},
-                {"id": "rye-bread", "name": "Rye Bread", "price": 5.00, "quantity": 1}
-            ],
-            "table_id": "t8",
-            "customer": {"name": "Rūta Balčiūnaitė"}
-        }
-        resp2 = requests.post(f"{BASE_URL}/orders", headers=HEADERS_NO_AUTH, json=order2)
-        order_ids.append(resp2.json().get('id'))
-        
-        passed = resp1.status_code == 200 and resp2.status_code == 200
-        results.append(log_test("Place 2 orders on t8", passed, 
-                               f"Order 1: {resp1.status_code}, Order 2: {resp2.status_code}"))
-    except Exception as e:
-        results.append(log_test("Place orders", False, str(e)))
-    
-    # 5.3: GET /api/tables/t8/bill without admin → 401
-    try:
-        resp = requests.get(f"{BASE_URL}/tables/t8/bill", headers=HEADERS_NO_AUTH)
-        passed = resp.status_code == 401
-        results.append(log_test("GET bill without admin returns 401", passed, 
-                               f"Status: {resp.status_code}"))
-    except Exception as e:
-        results.append(log_test("GET bill no auth", False, str(e)))
-    
-    # 5.4: GET /api/tables/t8/bill with admin → 200, verify calculations
-    try:
-        resp = requests.get(f"{BASE_URL}/tables/t8/bill", headers=HEADERS_ADMIN)
-        data = resp.json()
-        
-        # Expected: subtotal = 29.00 + 11.50 = 40.50
-        # tax = 40.50 * 0.21 = 8.505 → 8.51
-        # total = 40.50 + 8.51 = 49.01
-        expected_subtotal = 40.50
-        expected_tax = 8.51
-        expected_total = 49.01
-        
-        passed = (
-            resp.status_code == 200 and
-            abs(data.get('subtotal', 0) - expected_subtotal) < 0.01 and
-            abs(data.get('tax', 0) - expected_tax) < 0.01 and
-            abs(data.get('total', 0) - expected_total) < 0.01 and
-            data.get('invoice_number', '').startswith('INV') and
-            'table' in data and
-            'session' in data
-        )
-        results.append(log_test("GET bill with admin returns correct calculations", passed, 
-                               f"Subtotal: {data.get('subtotal')}, Tax: {data.get('tax')}, Total: {data.get('total')}, Invoice: {data.get('invoice_number')}"))
-    except Exception as e:
-        results.append(log_test("GET bill with admin", False, str(e)))
-    
-    # 5.5: POST /api/tables/t8/pay with admin → 200, marks orders paid
-    try:
-        resp = requests.post(f"{BASE_URL}/tables/t8/pay", 
-                            headers=HEADERS_ADMIN, 
-                            json={"payment_method": "card"})
-        data = resp.json()
-        passed = resp.status_code == 200 and data.get('ok') == True
-        results.append(log_test("POST pay with admin", passed, 
-                               f"Status: {resp.status_code}, OK: {data.get('ok')}"))
-    except Exception as e:
-        results.append(log_test("POST pay", False, str(e)))
-    
-    # 5.6: Verify table status is 'cleaning'
-    try:
-        resp = requests.get(f"{BASE_URL}/tables/t8", headers=HEADERS_ADMIN)
-        data = resp.json()
-        passed = data.get('status') == 'cleaning'
-        results.append(log_test("Table t8 status is 'cleaning' after pay", passed, 
-                               f"Status: {data.get('status')}"))
-    except Exception as e:
-        results.append(log_test("Verify t8 cleaning", False, str(e)))
-    
-    # 5.7: Verify orders are paid and delivered
-    try:
-        all_paid = True
-        for oid in order_ids:
-            resp = requests.get(f"{BASE_URL}/orders/{oid}", headers=HEADERS_ADMIN)
+        # Create a new delivery order if not provided
+        if not order_id:
+            resp = requests.get(f"{BASE_URL}/dishes")
+            dishes = resp.json()
+            dish = dishes[0]
+            
+            resp = requests.get(f"{BASE_URL}/delivery-zones")
+            zones = resp.json()
+            zone = zones[0]
+            
+            order_data = {
+                "type": "delivery",
+                "delivery_zone_id": zone['id'],
+                "customer": {"name": "Jonas Kazlauskas", "phone": "+37060098765"},
+                "address": {"address": "Savanorių pr. 255", "city": "Kaunas", "zip": "44300"},
+                "items": [{"id": dish['id'], "name": dish['name'], "price": dish['price'], "quantity": 1}]
+            }
+            resp = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS_NO_AUTH)
             order = resp.json()
-            if order.get('payment_status') != 'paid' or order.get('payment_method') != 'card' or order.get('status') != 'delivered':
-                all_paid = False
-                break
-        results.append(log_test("All orders marked paid and delivered", all_paid))
-    except Exception as e:
-        results.append(log_test("Verify orders paid", False, str(e)))
-    
-    # 5.8: Verify session is completed
-    try:
-        resp = requests.get(f"{BASE_URL}/tables/t8", headers=HEADERS_ADMIN)
-        data = resp.json()
-        # After pay, session should be completed, so active_session should be null
-        passed = data.get('active_session') is None
-        results.append(log_test("Session is completed (no active session)", passed, 
-                               f"Active session: {data.get('active_session')}"))
-    except Exception as e:
-        results.append(log_test("Verify session completed", False, str(e)))
-    
-    # 5.9: POST /api/tables/t8/cleaned → status='available'
-    try:
-        resp = requests.post(f"{BASE_URL}/tables/t8/cleaned", headers=HEADERS_ADMIN)
-        passed = resp.status_code == 200
+            order_id = order['id']
+            log_test("2.1 - Created new delivery order", True, f"Order ID: {order_id}")
         
-        resp2 = requests.get(f"{BASE_URL}/tables/t8", headers=HEADERS_ADMIN)
-        data = resp2.json()
-        passed = passed and data.get('status') == 'available'
-        results.append(log_test("Table t8 cleaned and available", passed, 
-                               f"Status: {data.get('status')}"))
-    except Exception as e:
-        results.append(log_test("Clean t8", False, str(e)))
-    
-    return all(results)
-
-# ============================================================
-# TEST 6: Auto no-show + reserved status
-# ============================================================
-def test_auto_status_updates():
-    print("\n=== TEST 6: Auto no-show + reserved status ===")
-    results = []
-    cleanup_table('t4')
-    
-    # 6.1: Create future reservation (now + 1 hour)
-    future_res_id = None
-    try:
-        now = datetime.now()
-        future_time = now + timedelta(hours=1)
-        res_data = {
-            "date": future_time.strftime("%Y-%m-%d"),
-            "time": future_time.strftime("%H:%M"),
-            "guests": 2,
-            "name": "Darius Mockus",
-            "phone": "+37063456789"
-        }
-        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
-        data = resp.json()
-        future_res_id = data.get('id')
-        passed = resp.status_code == 200
-        results.append(log_test("Create future reservation (now+1h)", passed, 
-                               f"Status: {resp.status_code}, ID: {future_res_id}"))
-    except Exception as e:
-        results.append(log_test("Create future reservation", False, str(e)))
-    
-    # 6.2: Assign table to future reservation
-    try:
-        resp = requests.put(f"{BASE_URL}/reservations/{future_res_id}", 
-                           headers=HEADERS_ADMIN, 
-                           json={"table_id": "t4"})
-        passed = resp.status_code == 200
-        results.append(log_test("Assign table t4 to future reservation", passed, 
-                               f"Status: {resp.status_code}"))
-    except Exception as e:
-        results.append(log_test("Assign table", False, str(e)))
-    
-    # 6.3: GET /api/tables → t4 should be 'reserved' (auto-set by autoUpdateTableStatuses)
-    try:
-        resp = requests.get(f"{BASE_URL}/tables", headers=HEADERS_ADMIN)
-        data = resp.json()
-        t4 = next((t for t in data if t.get('id') == 't4'), None)
-        passed = t4 and t4.get('status') == 'reserved'
-        results.append(log_test("Table t4 auto-marked as 'reserved'", passed, 
-                               f"Status: {t4.get('status') if t4 else 'N/A'}"))
-    except Exception as e:
-        results.append(log_test("Verify t4 reserved", False, str(e)))
-    
-    # 6.4: Create past reservation (now - 2 hours) for no-show test
-    past_res_id = None
-    try:
-        now = datetime.now()
-        past_time = now - timedelta(hours=2)
-        res_data = {
-            "date": past_time.strftime("%Y-%m-%d"),
-            "time": past_time.strftime("%H:%M"),
-            "guests": 4,
-            "name": "Jurgita Navickaitė",
-            "phone": "+37064567890"
-        }
-        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
-        data = resp.json()
-        past_res_id = data.get('id')
-        passed = resp.status_code == 200
-        results.append(log_test("Create past reservation (now-2h)", passed, 
-                               f"Status: {resp.status_code}, ID: {past_res_id}"))
+        # Update status to 'preparing'
+        resp = requests.put(f"{BASE_URL}/orders/{order_id}", 
+                          json={"status": "preparing"}, 
+                          headers=HEADERS_ADMIN)
+        assert resp.status_code == 200, f"Failed to update status: {resp.status_code}"
+        order = resp.json()
+        assert order['status'] == 'preparing', f"Expected status='preparing', got '{order['status']}'"
+        log_test("2.2 - Updated order status to 'preparing'", True)
         
-        # Assign a table to the past reservation so it can be checked by autoUpdateTableStatuses
-        if past_res_id:
-            requests.put(f"{BASE_URL}/reservations/{past_res_id}", 
-                        headers=HEADERS_ADMIN, 
-                        json={"table_id": "t3"})
+        # Dispatch courier during preparing
+        resp = requests.post(f"{BASE_URL}/orders/{order_id}/dispatch",
+                           json={"provider": "in_house"},
+                           headers=HEADERS_ADMIN)
+        assert resp.status_code == 200, f"Failed to dispatch: {resp.status_code} - {resp.text}"
+        result = resp.json()
+        
+        # Verify response structure
+        assert result.get('ok') == True, f"Expected ok=true, got {result.get('ok')}"
+        assert result.get('manual') == True, f"Expected manual=true, got {result.get('manual')}"
+        assert 'order' in result, "order not in response"
+        
+        order = result['order']
+        
+        # Verify delivery_status
+        assert order['delivery_status'] == 'courier_requested', \
+            f"Expected delivery_status='courier_requested', got '{order['delivery_status']}'"
+        
+        # Verify courier_requested_at is set
+        assert order['courier_requested_at'] is not None, "courier_requested_at should be set"
+        
+        # Verify status is STILL 'preparing' (NOT advanced to 'out')
+        assert order['status'] == 'preparing', \
+            f"Expected status='preparing' (not advanced), got '{order['status']}'"
+        
+        # Verify out_at is not set
+        assert order.get('out_at') is None or order.get('out_at') == '', \
+            f"out_at should be null/undefined, got {order.get('out_at')}"
+        
+        # Verify delivery method
+        assert order['delivery_method'] == 'in_house', \
+            f"Expected delivery_method='in_house', got '{order['delivery_method']}'"
+        assert order['delivery_provider'] == 'in_house', \
+            f"Expected delivery_provider='in_house', got '{order['delivery_provider']}'"
+        
+        log_test("2.3 - Dispatch during PREPARING (predictive)", True,
+                f"delivery_status=courier_requested, status=preparing (not advanced), courier_requested_at set, out_at=null")
+        
+        return order_id
+        
+    except AssertionError as e:
+        log_test("2 - Dispatch during PREPARING", False, str(e))
+        return None
     except Exception as e:
-        results.append(log_test("Create past reservation", False, str(e)))
-    
-    # 6.5: Trigger autoUpdateTableStatuses by calling GET /api/tables
-    try:
-        resp = requests.get(f"{BASE_URL}/tables", headers=HEADERS_ADMIN)
-        passed = resp.status_code == 200
-        results.append(log_test("Trigger autoUpdateTableStatuses", passed))
-    except Exception as e:
-        results.append(log_test("Trigger auto update", False, str(e)))
-    
-    # 6.6: Verify past reservation is marked as 'no_show'
-    try:
-        resp = requests.get(f"{BASE_URL}/reservations", headers=HEADERS_ADMIN)
-        data = resp.json()
-        past_res = next((r for r in data if r.get('id') == past_res_id), None)
-        passed = past_res and past_res.get('status') == 'no_show' and 'no_show_at' in past_res
-        results.append(log_test("Past reservation auto-marked as 'no_show'", passed, 
-                               f"Status: {past_res.get('status') if past_res else 'N/A'}, Has no_show_at: {'no_show_at' in past_res if past_res else False}"))
-    except Exception as e:
-        results.append(log_test("Verify no_show", False, str(e)))
-    
-    # Cleanup: cancel future reservation to free t4
-    try:
-        requests.put(f"{BASE_URL}/reservations/{future_res_id}", 
-                    headers=HEADERS_ADMIN, 
-                    json={"status": "cancelled"})
-    except:
-        pass
-    
-    return all(results)
+        log_test("2 - Dispatch during PREPARING", False, f"Exception: {str(e)}")
+        return None
 
-# ============================================================
-# TEST 7: Reservation status updates
-# ============================================================
-def test_reservation_status_updates():
-    print("\n=== TEST 7: Reservation status updates ===")
-    results = []
+def test_scenario_3_dispatch_during_ready():
+    """Scenario 3: Dispatch during READY (still works)"""
+    print("\n=== Scenario 3: Dispatch during READY ===")
     
-    # 7.1: Create a test reservation
-    res_id = None
     try:
-        res_data = {
-            "date": "2099-12-25",
-            "time": "18:00",
-            "guests": 6,
-            "name": "Audrius Stankevičius",
-            "phone": "+37065678901"
+        # Create delivery order
+        resp = requests.get(f"{BASE_URL}/dishes")
+        dishes = resp.json()
+        dish = dishes[0]
+        
+        resp = requests.get(f"{BASE_URL}/delivery-zones")
+        zones = resp.json()
+        zone = zones[0]
+        
+        order_data = {
+            "type": "delivery",
+            "delivery_zone_id": zone['id'],
+            "customer": {"name": "Rūta Jankauskas", "phone": "+37060055555"},
+            "address": {"address": "Vytauto pr. 50", "city": "Kaunas", "zip": "44281"},
+            "items": [{"id": dish['id'], "name": dish['name'], "price": dish['price'], "quantity": 1}]
         }
-        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
-        data = resp.json()
-        res_id = data.get('id')
-        passed = resp.status_code == 200
-        results.append(log_test("Create test reservation", passed, 
-                               f"Status: {resp.status_code}, ID: {res_id}"))
+        resp = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS_NO_AUTH)
+        order = resp.json()
+        order_id = order['id']
+        log_test("3.1 - Created delivery order", True)
+        
+        # Update to preparing
+        resp = requests.put(f"{BASE_URL}/orders/{order_id}", 
+                          json={"status": "preparing"}, 
+                          headers=HEADERS_ADMIN)
+        assert resp.status_code == 200
+        log_test("3.2 - Updated to 'preparing'", True)
+        
+        # Update to ready
+        resp = requests.put(f"{BASE_URL}/orders/{order_id}", 
+                          json={"status": "ready"}, 
+                          headers=HEADERS_ADMIN)
+        assert resp.status_code == 200
+        order = resp.json()
+        assert order['status'] == 'ready'
+        log_test("3.3 - Updated to 'ready'", True)
+        
+        # Dispatch with wolt
+        resp = requests.post(f"{BASE_URL}/orders/{order_id}/dispatch",
+                           json={"provider": "wolt"},
+                           headers=HEADERS_ADMIN)
+        assert resp.status_code == 200, f"Failed to dispatch: {resp.status_code} - {resp.text}"
+        result = resp.json()
+        order = result['order']
+        
+        # Verify delivery_status
+        assert order['delivery_status'] == 'courier_requested', \
+            f"Expected delivery_status='courier_requested', got '{order['delivery_status']}'"
+        
+        # Verify status STAYS 'ready' (not 'out')
+        assert order['status'] == 'ready', \
+            f"Expected status='ready' (not advanced), got '{order['status']}'"
+        
+        # Verify courier_requested_at is set
+        assert order['courier_requested_at'] is not None, "courier_requested_at should be set"
+        
+        log_test("3.4 - Dispatch during READY", True,
+                f"delivery_status=courier_requested, status=ready (not advanced), courier_requested_at set")
+        
+        return order_id
+        
+    except AssertionError as e:
+        log_test("3 - Dispatch during READY", False, str(e))
+        return None
     except Exception as e:
-        results.append(log_test("Create reservation", False, str(e)))
-        return False
+        log_test("3 - Dispatch during READY", False, f"Exception: {str(e)}")
+        return None
+
+def test_scenario_4_double_dispatch_prevention(order_id):
+    """Scenario 4: Double-dispatch prevention"""
+    print("\n=== Scenario 4: Double-dispatch prevention ===")
     
-    # 7.2: PUT without admin → 401
+    if not order_id:
+        log_test("4 - Double-dispatch prevention", False, "No order_id from scenario 3")
+        return
+    
     try:
-        resp = requests.put(f"{BASE_URL}/reservations/{res_id}", 
-                           headers=HEADERS_NO_AUTH, 
-                           json={"status": "cancelled"})
-        passed = resp.status_code == 401
-        results.append(log_test("PUT reservation without admin returns 401", passed, 
-                               f"Status: {resp.status_code}"))
+        # Try to dispatch again
+        resp = requests.post(f"{BASE_URL}/orders/{order_id}/dispatch",
+                           json={"provider": "bolt_food"},
+                           headers=HEADERS_ADMIN)
+        
+        # Should return 400
+        assert resp.status_code == 400, \
+            f"Expected 400 for double-dispatch, got {resp.status_code}"
+        
+        error_data = resp.json()
+        error_msg = error_data.get('error', '').lower()
+        assert 'already' in error_msg or 'courier' in error_msg, \
+            f"Error message should mention 'already' or 'courier', got: {error_msg}"
+        
+        log_test("4 - Double-dispatch prevention", True,
+                f"Correctly returned 400 with error: {error_data.get('error')}")
+        
+    except AssertionError as e:
+        log_test("4 - Double-dispatch prevention", False, str(e))
     except Exception as e:
-        results.append(log_test("PUT no auth", False, str(e)))
+        log_test("4 - Double-dispatch prevention", False, f"Exception: {str(e)}")
+
+def test_scenario_5_dispatch_from_received():
+    """Scenario 5: Dispatch from RECEIVED returns 400"""
+    print("\n=== Scenario 5: Dispatch from RECEIVED returns 400 ===")
     
-    # 7.3: PUT status='cancelled' with admin → 200
     try:
-        resp = requests.put(f"{BASE_URL}/reservations/{res_id}", 
-                           headers=HEADERS_ADMIN, 
-                           json={"status": "cancelled"})
-        data = resp.json()
-        passed = resp.status_code == 200 and data.get('status') == 'cancelled'
-        results.append(log_test("PUT status='cancelled'", passed, 
-                               f"Status: {resp.status_code}, New status: {data.get('status')}"))
+        # Create delivery order (status will be 'received')
+        resp = requests.get(f"{BASE_URL}/dishes")
+        dishes = resp.json()
+        dish = dishes[0]
+        
+        resp = requests.get(f"{BASE_URL}/delivery-zones")
+        zones = resp.json()
+        zone = zones[0]
+        
+        order_data = {
+            "type": "delivery",
+            "delivery_zone_id": zone['id'],
+            "customer": {"name": "Petras Vilkas", "phone": "+37060077777"},
+            "address": {"address": "Jonavos g. 60", "city": "Kaunas", "zip": "44282"},
+            "items": [{"id": dish['id'], "name": dish['name'], "price": dish['price'], "quantity": 1}]
+        }
+        resp = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS_NO_AUTH)
+        order = resp.json()
+        order_id = order['id']
+        assert order['status'] == 'received'
+        log_test("5.1 - Created order with status='received'", True)
+        
+        # Try to dispatch without changing status
+        resp = requests.post(f"{BASE_URL}/orders/{order_id}/dispatch",
+                           json={"provider": "in_house"},
+                           headers=HEADERS_ADMIN)
+        
+        # Should return 400
+        assert resp.status_code == 400, \
+            f"Expected 400 for dispatch from 'received', got {resp.status_code}"
+        
+        error_data = resp.json()
+        error_msg = error_data.get('error', '').lower()
+        assert 'preparing' in error_msg or 'ready' in error_msg, \
+            f"Error should mention 'Preparing or Ready', got: {error_data.get('error')}"
+        
+        log_test("5.2 - Dispatch from RECEIVED returns 400", True,
+                f"Correctly returned 400 with error: {error_data.get('error')}")
+        
+    except AssertionError as e:
+        log_test("5 - Dispatch from RECEIVED", False, str(e))
     except Exception as e:
-        results.append(log_test("PUT cancelled", False, str(e)))
+        log_test("5 - Dispatch from RECEIVED", False, f"Exception: {str(e)}")
+
+def test_scenario_6_dispatch_non_delivery_order():
+    """Scenario 6: Dispatch on non-delivery order returns 400"""
+    print("\n=== Scenario 6: Dispatch on non-delivery order returns 400 ===")
     
-    # 7.4: Create another reservation for no_show test
-    res_id2 = None
     try:
-        res_data = {
-            "date": "2099-12-26",
+        # Create pickup order
+        resp = requests.get(f"{BASE_URL}/dishes")
+        dishes = resp.json()
+        dish = dishes[0]
+        
+        order_data = {
+            "type": "pickup",
+            "customer": {"name": "Gintarė Mockus", "phone": "+37060088888"},
+            "items": [{"id": dish['id'], "name": dish['name'], "price": dish['price'], "quantity": 1}]
+        }
+        resp = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS_NO_AUTH)
+        order = resp.json()
+        order_id = order['id']
+        assert order['type'] == 'pickup'
+        log_test("6.1 - Created pickup order", True)
+        
+        # Update to preparing
+        resp = requests.put(f"{BASE_URL}/orders/{order_id}", 
+                          json={"status": "preparing"}, 
+                          headers=HEADERS_ADMIN)
+        assert resp.status_code == 200
+        log_test("6.2 - Updated to 'preparing'", True)
+        
+        # Try to dispatch
+        resp = requests.post(f"{BASE_URL}/orders/{order_id}/dispatch",
+                           json={"provider": "in_house"},
+                           headers=HEADERS_ADMIN)
+        
+        # Should return 400
+        assert resp.status_code == 400, \
+            f"Expected 400 for dispatch on pickup order, got {resp.status_code}"
+        
+        error_data = resp.json()
+        error_msg = error_data.get('error', '').lower()
+        assert 'not a delivery' in error_msg or 'delivery order' in error_msg, \
+            f"Error should mention 'Not a delivery order', got: {error_data.get('error')}"
+        
+        log_test("6.3 - Dispatch on pickup order returns 400", True,
+                f"Correctly returned 400 with error: {error_data.get('error')}")
+        
+    except AssertionError as e:
+        log_test("6 - Dispatch on non-delivery order", False, str(e))
+    except Exception as e:
+        log_test("6 - Dispatch on non-delivery order", False, f"Exception: {str(e)}")
+
+def test_scenario_7_dispatch_auth():
+    """Scenario 7: Dispatch auth"""
+    print("\n=== Scenario 7: Dispatch auth ===")
+    
+    try:
+        # Create and prepare a delivery order
+        resp = requests.get(f"{BASE_URL}/dishes")
+        dishes = resp.json()
+        dish = dishes[0]
+        
+        resp = requests.get(f"{BASE_URL}/delivery-zones")
+        zones = resp.json()
+        zone = zones[0]
+        
+        order_data = {
+            "type": "delivery",
+            "delivery_zone_id": zone['id'],
+            "customer": {"name": "Audrius Balčiūnas", "phone": "+37060099999"},
+            "address": {"address": "Kauno g. 15", "city": "Kaunas", "zip": "44283"},
+            "items": [{"id": dish['id'], "name": dish['name'], "price": dish['price'], "quantity": 1}]
+        }
+        resp = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS_NO_AUTH)
+        order = resp.json()
+        order_id = order['id']
+        
+        resp = requests.put(f"{BASE_URL}/orders/{order_id}", 
+                          json={"status": "preparing"}, 
+                          headers=HEADERS_ADMIN)
+        assert resp.status_code == 200
+        log_test("7.1 - Created and prepared delivery order", True)
+        
+        # Try to dispatch WITHOUT admin token
+        resp = requests.post(f"{BASE_URL}/orders/{order_id}/dispatch",
+                           json={"provider": "in_house"},
+                           headers=HEADERS_NO_AUTH)
+        
+        # Should return 401
+        assert resp.status_code == 401, \
+            f"Expected 401 without admin token, got {resp.status_code}"
+        
+        log_test("7.2 - Dispatch without admin token returns 401", True)
+        
+    except AssertionError as e:
+        log_test("7 - Dispatch auth", False, str(e))
+    except Exception as e:
+        log_test("7 - Dispatch auth", False, f"Exception: {str(e)}")
+
+def test_scenario_8_picked_up_endpoint(order_id=None):
+    """Scenario 8: Picked-up endpoint NEW behavior"""
+    print("\n=== Scenario 8: Picked-up endpoint NEW behavior ===")
+    
+    try:
+        # Use order from scenario 2 or create new one
+        if not order_id:
+            # Create and dispatch a new order
+            resp = requests.get(f"{BASE_URL}/dishes")
+            dishes = resp.json()
+            dish = dishes[0]
+            
+            resp = requests.get(f"{BASE_URL}/delivery-zones")
+            zones = resp.json()
+            zone = zones[0]
+            
+            order_data = {
+                "type": "delivery",
+                "delivery_zone_id": zone['id'],
+                "customer": {"name": "Kristina Paulauskas", "phone": "+37060011111"},
+                "address": {"address": "Donelaičio g. 73", "city": "Kaunas", "zip": "44290"},
+                "items": [{"id": dish['id'], "name": dish['name'], "price": dish['price'], "quantity": 1}]
+            }
+            resp = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS_NO_AUTH)
+            order = resp.json()
+            order_id = order['id']
+            
+            # Update to preparing
+            resp = requests.put(f"{BASE_URL}/orders/{order_id}", 
+                              json={"status": "preparing"}, 
+                              headers=HEADERS_ADMIN)
+            
+            # Dispatch
+            resp = requests.post(f"{BASE_URL}/orders/{order_id}/dispatch",
+                               json={"provider": "in_house"},
+                               headers=HEADERS_ADMIN)
+            assert resp.status_code == 200
+            log_test("8.1 - Created, prepared, and dispatched order", True)
+        
+        # Call picked-up endpoint
+        resp = requests.post(f"{BASE_URL}/orders/{order_id}/picked-up",
+                           headers=HEADERS_ADMIN)
+        
+        assert resp.status_code == 200, \
+            f"Failed to mark as picked-up: {resp.status_code} - {resp.text}"
+        
+        order = resp.json()
+        
+        # Verify status advanced to 'out'
+        assert order['status'] == 'out', \
+            f"Expected status='out', got '{order['status']}'"
+        
+        # Verify delivery_status is 'picked_up'
+        assert order['delivery_status'] == 'picked_up', \
+            f"Expected delivery_status='picked_up', got '{order['delivery_status']}'"
+        
+        # Verify picked_up_at is set
+        assert order['picked_up_at'] is not None, "picked_up_at should be set"
+        
+        # Verify out_at is set
+        assert order['out_at'] is not None, "out_at should be set"
+        
+        log_test("8.2 - Picked-up endpoint", True,
+                f"status=out, delivery_status=picked_up, picked_up_at and out_at both set")
+        
+        return order_id
+        
+    except AssertionError as e:
+        log_test("8 - Picked-up endpoint", False, str(e))
+        return None
+    except Exception as e:
+        log_test("8 - Picked-up endpoint", False, f"Exception: {str(e)}")
+        return None
+
+def test_scenario_9_picked_up_auth():
+    """Scenario 9: Picked-up auth"""
+    print("\n=== Scenario 9: Picked-up auth ===")
+    
+    try:
+        # Create, prepare, and dispatch an order
+        resp = requests.get(f"{BASE_URL}/dishes")
+        dishes = resp.json()
+        dish = dishes[0]
+        
+        resp = requests.get(f"{BASE_URL}/delivery-zones")
+        zones = resp.json()
+        zone = zones[0]
+        
+        order_data = {
+            "type": "delivery",
+            "delivery_zone_id": zone['id'],
+            "customer": {"name": "Darius Šimkus", "phone": "+37060022222"},
+            "address": {"address": "Taikos pr. 111", "city": "Kaunas", "zip": "44291"},
+            "items": [{"id": dish['id'], "name": dish['name'], "price": dish['price'], "quantity": 1}]
+        }
+        resp = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS_NO_AUTH)
+        order = resp.json()
+        order_id = order['id']
+        
+        resp = requests.put(f"{BASE_URL}/orders/{order_id}", 
+                          json={"status": "preparing"}, 
+                          headers=HEADERS_ADMIN)
+        
+        resp = requests.post(f"{BASE_URL}/orders/{order_id}/dispatch",
+                           json={"provider": "in_house"},
+                           headers=HEADERS_ADMIN)
+        assert resp.status_code == 200
+        log_test("9.1 - Created, prepared, and dispatched order", True)
+        
+        # Try picked-up WITHOUT admin token
+        resp = requests.post(f"{BASE_URL}/orders/{order_id}/picked-up",
+                           headers=HEADERS_NO_AUTH)
+        
+        # Should return 401
+        assert resp.status_code == 401, \
+            f"Expected 401 without admin token, got {resp.status_code}"
+        
+        log_test("9.2 - Picked-up without admin token returns 401", True)
+        
+    except AssertionError as e:
+        log_test("9 - Picked-up auth", False, str(e))
+    except Exception as e:
+        log_test("9 - Picked-up auth", False, f"Exception: {str(e)}")
+
+def test_scenario_10_delivered_endpoint(order_id=None):
+    """Scenario 10: Delivered endpoint still works"""
+    print("\n=== Scenario 10: Delivered endpoint still works ===")
+    
+    try:
+        # Use order from scenario 8 or create new one
+        if not order_id:
+            # Create full flow order
+            resp = requests.get(f"{BASE_URL}/dishes")
+            dishes = resp.json()
+            dish = dishes[0]
+            
+            resp = requests.get(f"{BASE_URL}/delivery-zones")
+            zones = resp.json()
+            zone = zones[0]
+            
+            order_data = {
+                "type": "delivery",
+                "delivery_zone_id": zone['id'],
+                "customer": {"name": "Vaida Rimkus", "phone": "+37060033333"},
+                "address": {"address": "Kęstučio g. 44", "city": "Kaunas", "zip": "44292"},
+                "items": [{"id": dish['id'], "name": dish['name'], "price": dish['price'], "quantity": 1}]
+            }
+            resp = requests.post(f"{BASE_URL}/orders", json=order_data, headers=HEADERS_NO_AUTH)
+            order = resp.json()
+            order_id = order['id']
+            
+            resp = requests.put(f"{BASE_URL}/orders/{order_id}", 
+                              json={"status": "preparing"}, 
+                              headers=HEADERS_ADMIN)
+            
+            resp = requests.post(f"{BASE_URL}/orders/{order_id}/dispatch",
+                               json={"provider": "in_house"},
+                               headers=HEADERS_ADMIN)
+            
+            resp = requests.post(f"{BASE_URL}/orders/{order_id}/picked-up",
+                               headers=HEADERS_ADMIN)
+            assert resp.status_code == 200
+            log_test("10.1 - Created full flow order (dispatched + picked-up)", True)
+        
+        # Call delivered endpoint
+        resp = requests.post(f"{BASE_URL}/orders/{order_id}/delivered",
+                           headers=HEADERS_ADMIN)
+        
+        assert resp.status_code == 200, \
+            f"Failed to mark as delivered: {resp.status_code} - {resp.text}"
+        
+        order = resp.json()
+        
+        # Verify status is 'delivered'
+        assert order['status'] == 'delivered', \
+            f"Expected status='delivered', got '{order['status']}'"
+        
+        # Verify delivery_status is 'delivered'
+        assert order['delivery_status'] == 'delivered', \
+            f"Expected delivery_status='delivered', got '{order['delivery_status']}'"
+        
+        # Verify delivered_at is set
+        assert order['delivered_at'] is not None, "delivered_at should be set"
+        
+        log_test("10.2 - Delivered endpoint", True,
+                f"status=delivered, delivery_status=delivered, delivered_at set")
+        
+    except AssertionError as e:
+        log_test("10 - Delivered endpoint", False, str(e))
+    except Exception as e:
+        log_test("10 - Delivered endpoint", False, f"Exception: {str(e)}")
+
+def test_scenario_11_regression_sanity():
+    """Scenario 11: Regression sanity checks"""
+    print("\n=== Scenario 11: Regression sanity checks ===")
+    
+    try:
+        # 11.1 - GET /api/categories returns 5
+        resp = requests.get(f"{BASE_URL}/categories")
+        assert resp.status_code == 200, f"Categories failed: {resp.status_code}"
+        categories = resp.json()
+        assert len(categories) == 5, f"Expected 5 categories, got {len(categories)}"
+        log_test("11.1 - GET /api/categories returns 5", True)
+        
+        # 11.2 - GET /api/dishes returns array
+        resp = requests.get(f"{BASE_URL}/dishes")
+        assert resp.status_code == 200, f"Dishes failed: {resp.status_code}"
+        dishes = resp.json()
+        assert isinstance(dishes, list), "Dishes should be an array"
+        assert len(dishes) > 0, "Should have dishes"
+        log_test("11.2 - GET /api/dishes returns array", True, f"Found {len(dishes)} dishes")
+        
+        # 11.3 - POST /api/admin/login with password 'admin123' returns token
+        resp = requests.post(f"{BASE_URL}/admin/login",
+                           json={"password": "admin123"},
+                           headers=HEADERS_NO_AUTH)
+        assert resp.status_code == 200, f"Admin login failed: {resp.status_code}"
+        login_data = resp.json()
+        assert 'token' in login_data, "Token not in response"
+        assert login_data['token'] == 'admin123', f"Expected token='admin123', got '{login_data['token']}'"
+        log_test("11.3 - POST /api/admin/login returns token", True)
+        
+        # 11.4 - GET /api/kitchen/orders with admin returns array
+        resp = requests.get(f"{BASE_URL}/kitchen/orders", headers=HEADERS_ADMIN)
+        assert resp.status_code == 200, f"Kitchen orders failed: {resp.status_code}"
+        kitchen_orders = resp.json()
+        assert isinstance(kitchen_orders, list), "Kitchen orders should be an array"
+        log_test("11.4 - GET /api/kitchen/orders returns array", True, 
+                f"Found {len(kitchen_orders)} active orders")
+        
+        # 11.5 - POST /api/reservations with valid body works
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+        reservation_data = {
+            "name": "Tomas Urbanavičius",
+            "phone": "+37060044444",
+            "email": "tomas@example.lt",
+            "date": tomorrow,
             "time": "19:00",
-            "guests": 3,
-            "name": "Laima Žukauskas",
-            "phone": "+37066789012"
+            "guests": 4,
+            "special_requests": "Window table if possible"
         }
-        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
-        res_id2 = resp.json().get('id')
-        passed = resp.status_code == 200
-        results.append(log_test("Create second reservation", passed))
+        resp = requests.post(f"{BASE_URL}/reservations",
+                           json=reservation_data,
+                           headers=HEADERS_NO_AUTH)
+        assert resp.status_code == 200, f"Reservation failed: {resp.status_code} - {resp.text}"
+        reservation = resp.json()
+        assert 'confirmation' in reservation, "Confirmation not in response"
+        assert reservation['confirmation'].startswith('RES'), "Confirmation should start with RES"
+        log_test("11.5 - POST /api/reservations works", True,
+                f"Created reservation {reservation['confirmation']}")
+        
+    except AssertionError as e:
+        log_test("11 - Regression sanity", False, str(e))
     except Exception as e:
-        results.append(log_test("Create second reservation", False, str(e)))
-    
-    # 7.5: PUT status='no_show' → sets no_show_at
-    try:
-        resp = requests.put(f"{BASE_URL}/reservations/{res_id2}", 
-                           headers=HEADERS_ADMIN, 
-                           json={"status": "no_show"})
-        data = resp.json()
-        passed = resp.status_code == 200 and data.get('status') == 'no_show' and 'no_show_at' in data
-        results.append(log_test("PUT status='no_show' sets no_show_at", passed, 
-                               f"Status: {data.get('status')}, Has no_show_at: {'no_show_at' in data}"))
-    except Exception as e:
-        results.append(log_test("PUT no_show", False, str(e)))
-    
-    # 7.6: Create third reservation for completed test
-    res_id3 = None
-    try:
-        res_data = {
-            "date": "2099-12-27",
-            "time": "20:00",
-            "guests": 5,
-            "name": "Mindaugas Rimkus",
-            "phone": "+37067890123"
-        }
-        resp = requests.post(f"{BASE_URL}/reservations", headers=HEADERS_NO_AUTH, json=res_data)
-        res_id3 = resp.json().get('id')
-        passed = resp.status_code == 200
-        results.append(log_test("Create third reservation", passed))
-    except Exception as e:
-        results.append(log_test("Create third reservation", False, str(e)))
-    
-    # 7.7: PUT status='completed' → sets completed_at
-    try:
-        resp = requests.put(f"{BASE_URL}/reservations/{res_id3}", 
-                           headers=HEADERS_ADMIN, 
-                           json={"status": "completed"})
-        data = resp.json()
-        passed = resp.status_code == 200 and data.get('status') == 'completed' and 'completed_at' in data
-        results.append(log_test("PUT status='completed' sets completed_at", passed, 
-                               f"Status: {data.get('status')}, Has completed_at: {'completed_at' in data}"))
-    except Exception as e:
-        results.append(log_test("PUT completed", False, str(e)))
-    
-    return all(results)
+        log_test("11 - Regression sanity", False, f"Exception: {str(e)}")
 
-# ============================================================
-# MAIN TEST RUNNER
-# ============================================================
 def main():
-    print("=" * 60)
-    print("AUKSTAITIJA RESTAURANT - TABLE LIFECYCLE BACKEND TESTS")
-    print("=" * 60)
-    print(f"Base URL: {BASE_URL}")
-    print(f"Admin Token: {ADMIN_TOKEN}")
-    print("=" * 60)
+    print("=" * 80)
+    print("PREDICTIVE COURIER DISPATCH - BACKEND TEST SUITE")
+    print("=" * 80)
     
-    test_results = {
-        "Test 1: Tables list/detail endpoints": test_tables_endpoints(),
-        "Test 2: Walk-in seating": test_walkin_seating(),
-        "Test 3: QR/dine-in order auto-creates session": test_qr_order_session(),
-        "Test 4: Reservation check-in": test_reservation_checkin(),
-        "Test 5: Bill + pay flow": test_bill_pay_flow(),
-        "Test 6: Auto no-show + reserved status": test_auto_status_updates(),
-        "Test 7: Reservation status updates": test_reservation_status_updates(),
-    }
+    # Run all scenarios
+    order_1 = test_scenario_1_order_creation_prep_time()
+    order_2 = test_scenario_2_dispatch_during_preparing()
+    order_3 = test_scenario_3_dispatch_during_ready()
+    test_scenario_4_double_dispatch_prevention(order_3)
+    test_scenario_5_dispatch_from_received()
+    test_scenario_6_dispatch_non_delivery_order()
+    test_scenario_7_dispatch_auth()
+    order_8 = test_scenario_8_picked_up_endpoint(order_2)
+    test_scenario_9_picked_up_auth()
+    test_scenario_10_delivered_endpoint(order_8)
+    test_scenario_11_regression_sanity()
     
-    print("\n" + "=" * 60)
-    print("FINAL SUMMARY")
-    print("=" * 60)
+    # Summary
+    print("\n" + "=" * 80)
+    print("TEST SUMMARY")
+    print("=" * 80)
+    print(f"Total Tests: {pass_count + fail_count}")
+    print(f"✅ Passed: {pass_count}")
+    print(f"❌ Failed: {fail_count}")
+    print(f"Success Rate: {(pass_count / (pass_count + fail_count) * 100):.1f}%")
+    print("=" * 80)
     
-    passed_count = sum(1 for v in test_results.values() if v)
-    total_count = len(test_results)
+    if fail_count > 0:
+        print("\n⚠️  FAILED TESTS:")
+        for result in test_results:
+            if not result['passed']:
+                print(f"  - {result['test']}")
+                if result['details']:
+                    print(f"    {result['details']}")
+    else:
+        print("\n🎉 ALL TESTS PASSED!")
     
-    for test_name, passed in test_results.items():
-        status = "✅ PASS" if passed else "❌ FAIL"
-        print(f"{status} - {test_name}")
-    
-    print("=" * 60)
-    print(f"TOTAL: {passed_count}/{total_count} tests passed ({passed_count*100//total_count}%)")
-    print("=" * 60)
-    
-    return passed_count == total_count
+    return fail_count == 0
 
 if __name__ == "__main__":
     success = main()

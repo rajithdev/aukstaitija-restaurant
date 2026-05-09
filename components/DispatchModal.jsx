@@ -59,7 +59,7 @@ ${order.notes ? `NOTES:\n  ${order.notes}` : ''}`.trim()
     const data = await res.json()
     setSending(false)
     if (data.ok) {
-      toast.success('Dispatched! Order moved to Out for Delivery.')
+      toast.success(order.status === 'preparing' ? 'Courier called early — saving you time!' : 'Dispatched! Order moved to courier.')
       onDispatched?.(data.order)
       onClose?.()
     } else {
@@ -67,14 +67,24 @@ ${order.notes ? `NOTES:\n  ${order.notes}` : ''}`.trim()
     }
   }
 
+  const isPredictive = order.status === 'preparing'
+
   return (
     <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
       <Card className="w-full max-w-2xl p-6 max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-start mb-4">
           <div>
-            <p className="text-primary text-xs uppercase tracking-[0.4em] mb-1">Dispatch courier</p>
+            <p className="text-primary text-xs uppercase tracking-[0.4em] mb-1">{isPredictive ? 'Call courier early' : 'Dispatch courier'}</p>
             <h3 className="font-serif text-3xl">#{order.order_number}</h3>
-            <p className="text-xs text-muted-foreground">{order.delivery_zone_name || ''} {order.courier_eta ? `· ~${order.courier_eta}min ETA` : ''}</p>
+            <p className="text-xs text-muted-foreground">
+              {order.delivery_zone_name || ''} {order.courier_eta ? `· ~${order.courier_eta}min ETA` : ''}
+              {isPredictive && order.prep_time_total ? ` · Prep ~${order.prep_time_total}min` : ''}
+            </p>
+            {isPredictive && (
+              <p className="text-xs text-primary mt-1 font-semibold">
+                ⚡ Predictive dispatch — courier travels while food finishes cooking
+              </p>
+            )}
           </div>
           <button onClick={onClose}><X className="h-5 w-5" /></button>
         </div>
@@ -140,7 +150,7 @@ ${order.notes ? `NOTES:\n  ${order.notes}` : ''}`.trim()
             {copied ? <><Check className="h-4 w-4 mr-1" /> Copied</> : <><Copy className="h-4 w-4 mr-1" /> Copy Delivery Info</>}
           </Button>
           <Button onClick={dispatch} disabled={sending} className={`h-11 ${PROVIDERS.find(p => p.id === provider)?.cls}`}>
-            <Bike className="h-4 w-4 mr-1" /> {sending ? 'Sending…' : 'Mark as Sent'}
+            <Bike className="h-4 w-4 mr-1" /> {sending ? 'Sending…' : (isPredictive ? 'Request Courier' : 'Mark as Sent')}
           </Button>
         </div>
         <p className="text-[10px] text-center text-muted-foreground mt-3">

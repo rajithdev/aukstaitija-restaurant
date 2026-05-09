@@ -245,7 +245,7 @@ function AdminPage() {
                           </span>
                         )}
                         {o.delivery_status && o.delivery_status !== 'pending' && (
-                          <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-muted">{o.delivery_status.replace('_',' ')}</span>
+                          <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-muted">{o.delivery_status.replace(/_/g,' ')}</span>
                         )}
                       </div>
                       <p className="text-sm">{o.customer?.name} · {o.customer?.phone}</p>
@@ -259,17 +259,17 @@ function AdminPage() {
                       <select value={o.status} onChange={e => updateOrderStatus(o.id, e.target.value)} className="h-9 px-3 text-sm bg-background border border-border rounded-md">
                         {['received','preparing','ready','out','delivered','cancelled'].map(s => <option key={s} value={s}>{t(`status.${s}`)}</option>)}
                       </select>
-                      {o.type === 'delivery' && o.status === 'ready' && (
+                      {o.type === 'delivery' && ['preparing','ready'].includes(o.status) && !['courier_requested','courier_assigned','picked_up','on_the_way','delivered'].includes(o.delivery_status) && (
                         <Button size="sm" onClick={() => setDispatchOrder(o)}>
-                          <Bike className="h-3 w-3 mr-1" /> Dispatch Courier
+                          <Bike className="h-3 w-3 mr-1" /> {o.status === 'preparing' ? 'Call Courier' : 'Dispatch Courier'}
                         </Button>
                       )}
-                      {o.type === 'delivery' && o.delivery_status === 'courier_assigned' && (
+                      {o.type === 'delivery' && ['courier_requested','courier_assigned'].includes(o.delivery_status) && o.status !== 'out' && (
                         <Button size="sm" variant="outline" onClick={async () => { await adminFetch(`/api/orders/${o.id}/picked-up`, { method: 'POST' }); loadAll() }}>
                           <Truck className="h-3 w-3 mr-1" /> Picked up
                         </Button>
                       )}
-                      {o.type === 'delivery' && o.delivery_status === 'on_the_way' && (
+                      {o.type === 'delivery' && (o.delivery_status === 'picked_up' || o.delivery_status === 'on_the_way') && (
                         <Button size="sm" variant="outline" onClick={async () => { await adminFetch(`/api/orders/${o.id}/delivered`, { method: 'POST' }); loadAll() }}>
                           ✓ Mark Delivered
                         </Button>

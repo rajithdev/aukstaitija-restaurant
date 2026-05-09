@@ -351,6 +351,82 @@ backend:
           agent: "testing"
           comment: "✅ PASS - Reservation status updates + auto no-show verified: (1) PUT without admin returns 401 ✅ (2) PUT status='cancelled' works ✅ (3) PUT status='no_show' sets no_show_at timestamp ✅ (4) PUT status='completed' sets completed_at timestamp ✅ (5) Future reservation (now+1h) with assigned table auto-marks table as 'reserved' ✅ (6) Past reservation (now-2h) with assigned table auto-marks as 'no_show' when GET /api/tables triggers autoUpdateTableStatuses ✅"
 
+
+  - task: "Order creation stores prep_time_total field"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "POST /api/orders now computes prep_time_total = max prep_time across all items (parallel cooking). Stored for delivery orders."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - Order creation verified: (1) GET /api/dishes returns dish with prep_time ✅ (2) GET /api/delivery-zones returns zone with eta_minutes ✅ (3) POST /api/orders with type='delivery' creates order with prep_time_total > 0 (number, minutes) ✅ (4) delivery_status='pending', courier_requested_at=null, courier_eta=zone.eta_minutes ✅"
+
+  - task: "Predictive courier dispatch (POST /api/orders/:id/dispatch during preparing/ready)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "POST /api/orders/:id/dispatch now allows dispatch during 'preparing' OR 'ready' status. Sets delivery_status='courier_requested', courier_requested_at=now. Does NOT advance order.status (food may still be cooking). Returns 400 if courier already requested or if status not in ['preparing','ready']. Requires admin auth."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - All dispatch scenarios verified: (1) Dispatch during PREPARING: status stays 'preparing', delivery_status='courier_requested', courier_requested_at set, out_at=null ✅ (2) Dispatch during READY: status stays 'ready', delivery_status='courier_requested', courier_requested_at set ✅ (3) Double-dispatch prevention: second dispatch returns 400 'Courier already requested' ✅ (4) Dispatch from RECEIVED returns 400 'Order must be Preparing or Ready' ✅ (5) Dispatch on pickup order returns 400 'Not a delivery order' ✅ (6) Dispatch without admin token returns 401 ✅"
+
+  - task: "Picked-up endpoint NEW behavior (POST /api/orders/:id/picked-up)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "POST /api/orders/:id/picked-up now sets delivery_status='picked_up' AND status='out' AND picked_up_at + out_at timestamps. This is the moment courier actually leaves with food. Admin-only."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - Picked-up endpoint verified: (1) POST /picked-up on dispatched order advances status to 'out' ✅ (2) delivery_status='picked_up' ✅ (3) picked_up_at and out_at both set with ISO timestamps ✅ (4) POST /picked-up without admin token returns 401 ✅"
+
+  - task: "Delivered endpoint (POST /api/orders/:id/delivered)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "POST /api/orders/:id/delivered unchanged - sets status='delivered', delivery_status='delivered', delivered_at timestamp. Admin-only."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - Delivered endpoint verified: (1) POST /delivered on picked-up order sets status='delivered' ✅ (2) delivery_status='delivered' ✅ (3) delivered_at timestamp set ✅"
+
+  - task: "Regression sanity checks (categories, dishes, admin login, kitchen orders, reservations)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Existing endpoints should not be affected by predictive dispatch changes."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - All regression tests passed: (1) GET /api/categories returns 5 ✅ (2) GET /api/dishes returns array of 10 dishes ✅ (3) POST /api/admin/login with password 'admin123' returns token ✅ (4) GET /api/kitchen/orders with admin returns array (6 active orders) ✅ (5) POST /api/reservations with valid body creates reservation with RES prefix ✅"
+
 frontend:
   - task: "Customer pages (home, menu, dish detail, cart, checkout, reservations, order tracking, admin)"
     implemented: true
@@ -367,7 +443,7 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 1
+  test_sequence: 4
   run_ui: false
 
 test_plan:
@@ -379,7 +455,73 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      Phase 1 MVP backend implemented. Use admin password `admin123` (set in .env as ADMIN_PASSWORD).
+      ## Predictive Courier Dispatch — Backend changes (please test)
+
+      Implemented predictive courier dispatch so couriers can be called while food
+      is still cooking, eliminating wait time at the pass.
+
+      Backend changes in /app/app/api/[[...path]]/route.js:
+
+      1) POST /api/orders
+         - When type='delivery', the order now stores `prep_time_total` = max
+           prep_time across all items (parallel cooking assumption). Falls back
+           to 15 if dishes can't be resolved.
+         - New initial field `courier_requested_at: null`.
+
+      2) POST /api/orders/:id/dispatch  (BEHAVIOR CHANGED)
+         - Previously only allowed when status='ready' and set status='out'.
+         - Now allowed when status IN ['preparing', 'ready'].
+         - Sets delivery_status='courier_requested', courier_requested_at=now,
+           courier_assigned_at=now (kept for back-compat).
+         - Does NOT advance order.status (food may still be cooking).
+         - Returns 400 if courier already requested ('courier_requested',
+           'picked_up', 'on_the_way', 'delivered').
+         - Still requires admin auth (401 without token).
+         - Still requires order.type='delivery' (400 otherwise).
+
+      3) POST /api/orders/:id/picked-up  (BEHAVIOR CHANGED)
+         - Previously: set delivery_status='on_the_way'.
+         - Now: sets delivery_status='picked_up' AND status='out' AND
+           picked_up_at + out_at timestamps. This is the moment the courier
+           actually leaves the restaurant with the food.
+         - Admin-only.
+
+      4) POST /api/orders/:id/delivered — unchanged (sets status=delivered,
+         delivery_status='delivered', delivered_at).
+
+      Please test the following scenarios end-to-end:
+
+      A) Order creation:
+         - Create a delivery order with delivery_zone_id and at least 1 item ->
+           expect order.prep_time_total > 0, courier_requested_at === null,
+           delivery_status === 'pending'.
+
+      B) Dispatch during preparing (NEW happy path):
+         - Create delivery order, PUT status='preparing', then
+           POST /orders/:id/dispatch with admin token & {provider:'in_house'}.
+         - Expect 200 ok:true, order.delivery_status==='courier_requested',
+           order.courier_requested_at set, order.status STILL 'preparing'.
+
+      C) Dispatch during ready:
+         - Create delivery order, PUT status='preparing' then 'ready', then
+           POST /dispatch -> same behavior, status stays 'ready', delivery_status
+           becomes 'courier_requested'.
+
+      D) Double-dispatch prevention:
+         - After C, calling /dispatch again returns 400 'Courier already requested'.
+
+      E) Dispatch from received returns 400 ('Order must be Preparing or Ready
+         before dispatch').
+
+      F) Picked-up flow:
+         - After dispatch (state=preparing+courier_requested), POST /picked-up ->
+           order.status='out', delivery_status='picked_up', picked_up_at + out_at
+           set.
+
+      G) Auth: /dispatch and /picked-up without admin token -> 401.
+
+      H) Non-delivery order /dispatch -> 400.
+
       Admin endpoints require header `x-admin-token: admin123`.
       Database auto-seeds 5 categories, 10 Lithuanian dishes, and 10 tables on first call.
       All endpoints prefixed with /api. Currency EUR, VAT 21%, delivery fee €3.50 when type=delivery.
@@ -471,6 +613,74 @@ agent_communication:
          - Check-in with admin creates session with origin='reservation' ✅
          - Reservation status becomes 'checked_in' with timestamp ✅
          - Table status becomes 'occupied' ✅
+  - agent: "testing"
+    message: |
+      ✅ PREDICTIVE COURIER DISPATCH TESTS - ALL PASSED (27/27 - 100% success rate)
+      
+      Test Run 4 - Predictive Courier Dispatch Feature:
+      
+      **NEW FEATURES TESTED:**
+      
+      1. Order creation stores prep_time_total (3 tests):
+         - GET /api/dishes returns dish with prep_time field ✅
+         - GET /api/delivery-zones returns zone with eta_minutes ✅
+         - POST /api/orders with type='delivery' creates order with prep_time_total=25 minutes (number) ✅
+         - Initial state: delivery_status='pending', courier_requested_at=null, courier_eta=zone.eta_minutes ✅
+      
+      2. Predictive dispatch during PREPARING (6 tests):
+         - Created delivery order and updated status to 'preparing' ✅
+         - POST /api/orders/:id/dispatch with provider='in_house' returns 200 ✅
+         - Response: ok=true, manual=true, order object included ✅
+         - delivery_status='courier_requested', courier_requested_at set ✅
+         - status STAYS 'preparing' (NOT advanced to 'out') ✅
+         - out_at remains null/undefined ✅
+         - delivery_method='in_house', delivery_provider='in_house' ✅
+      
+      3. Dispatch during READY (4 tests):
+         - Created delivery order, updated to 'preparing' then 'ready' ✅
+         - POST /dispatch with provider='wolt' returns 200 ✅
+         - delivery_status='courier_requested', courier_requested_at set ✅
+         - status STAYS 'ready' (NOT advanced to 'out') ✅
+      
+      4. Double-dispatch prevention (1 test):
+         - Second POST /dispatch on same order returns 400 ✅
+         - Error message: "Courier already requested for this order" ✅
+      
+      5. Dispatch validation (5 tests):
+         - Dispatch from 'received' status returns 400 "Order must be Preparing or Ready before dispatch" ✅
+         - Dispatch on pickup order returns 400 "Not a delivery order" ✅
+         - Dispatch without admin token returns 401 ✅
+      
+      6. Picked-up endpoint NEW behavior (3 tests):
+         - POST /api/orders/:id/picked-up on dispatched order returns 200 ✅
+         - status advanced to 'out' ✅
+         - delivery_status='picked_up' ✅
+         - picked_up_at and out_at both set with ISO timestamps ✅
+         - Picked-up without admin token returns 401 ✅
+      
+      7. Delivered endpoint (2 tests):
+         - POST /api/orders/:id/delivered on picked-up order returns 200 ✅
+         - status='delivered', delivery_status='delivered', delivered_at set ✅
+      
+      8. Regression sanity checks (5 tests):
+         - GET /api/categories returns 5 categories ✅
+         - GET /api/dishes returns array of 10 dishes ✅
+         - POST /api/admin/login with password 'admin123' returns token ✅
+         - GET /api/kitchen/orders with admin returns array (6 active orders) ✅
+         - POST /api/reservations creates reservation with RES prefix ✅
+      
+      **CRITICAL VERIFICATION:**
+      - ✅ NO REGRESSIONS: All existing endpoints working correctly
+      - ✅ Dispatch during PREPARING does NOT advance status (predictive behavior)
+      - ✅ Dispatch during READY does NOT advance status
+      - ✅ Picked-up endpoint NOW advances status to 'out' (new behavior)
+      - ✅ Double-dispatch prevention working
+      - ✅ Auth checks working (401 without admin token)
+      - ✅ Validation working (400 for invalid states)
+      
+      All predictive courier dispatch features implemented correctly and production-ready.
+      No issues found. Backend is stable.
+
          - Second check-in returns 409 ✅
          - Check-in without table_id returns 400 ✅
       

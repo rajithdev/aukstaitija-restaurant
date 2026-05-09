@@ -11,9 +11,9 @@ import { CheckCircle2, ChefHat, Clock, Truck, PackageCheck, Bike, Map } from 'lu
 const STAGES_DELIVERY = [
   { key: 'received', label: 'Order received', icon: Clock },
   { key: 'preparing', label: 'Preparing', icon: ChefHat },
-  { key: 'ready', label: 'Ready for courier', icon: PackageCheck },
-  { key: 'courier_assigned', label: 'Courier assigned', icon: Bike },
-  { key: 'on_the_way', label: 'On the way', icon: Truck },
+  { key: 'courier_requested', label: 'Courier requested', icon: Bike },
+  { key: 'ready', label: 'Ready', icon: PackageCheck },
+  { key: 'picked_up', label: 'Picked up', icon: Truck },
   { key: 'delivered', label: 'Delivered', icon: CheckCircle2 },
 ]
 
@@ -34,10 +34,15 @@ function progressIndex(order, stages) {
   if (order.status === 'cancelled') return -1
   if (order.type === 'delivery') {
     const dStatus = order.delivery_status
+    // Final
     if (order.status === 'delivered' || dStatus === 'delivered') return stages.length - 1
-    if (dStatus === 'on_the_way') return 4
-    if (dStatus === 'courier_assigned') return 3
-    if (order.status === 'ready') return 2
+    // Picked up / on the way
+    if (dStatus === 'picked_up' || dStatus === 'on_the_way' || order.status === 'out') return 4
+    // Ready (food done — may still be waiting for courier)
+    if (order.status === 'ready') return 3
+    // Courier requested while still preparing
+    if (dStatus === 'courier_requested' || dStatus === 'courier_assigned') return 2
+    // Preparing
     if (order.status === 'preparing') return 1
     return 0
   } else {
@@ -76,7 +81,13 @@ function OrderTrack() {
   const stages = isDelivery ? STAGES_DELIVERY : STAGES_NON_DELIVERY
   const currentIdx = progressIndex(order, stages)
   const providerBadge = isDelivery ? PROVIDER_BADGE[order.delivery_method || order.delivery_provider || 'in_house'] : null
-  const headlineLabel = currentIdx >= 0 ? stages[currentIdx].label : 'Cancelled'
+  const courierAlreadyRequested = isDelivery && ['courier_requested', 'courier_assigned', 'picked_up', 'on_the_way', 'delivered'].includes(order.delivery_status)
+  const isReadyWaitingCourier = isDelivery && order.status === 'ready' && order.delivery_status !== 'picked_up' && order.delivery_status !== 'on_the_way' && order.delivery_status !== 'delivered'
+  const headlineLabel = currentIdx >= 0
+    ? (isReadyWaitingCourier && !courierAlreadyRequested ? 'Ready · Calling courier' :
+       isReadyWaitingCourier && courierAlreadyRequested ? 'Ready · Waiting for courier' :
+       stages[currentIdx].label)
+    : 'Cancelled'
 
   return (
     <div className="min-h-screen bg-background">
@@ -113,9 +124,9 @@ function OrderTrack() {
                     {isCurrent && (
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {s.key === 'preparing' && 'Our kitchen is preparing your order…'}
-                        {s.key === 'ready' && (isDelivery ? 'Waiting for the courier' : 'Pickup ready when you arrive')}
-                        {s.key === 'courier_assigned' && `${providerBadge?.label || 'Courier'} is on the way to pick up your food`}
-                        {s.key === 'on_the_way' && 'Your food is en route — almost there!'}
+                        {s.key === 'courier_requested' && `${providerBadge?.label || 'Courier'} has been called and is on the way to the restaurant`}
+                        {s.key === 'ready' && (isDelivery ? (courierAlreadyRequested ? 'Waiting for courier to pick up your order' : 'Calling a courier now') : 'Pickup ready when you arrive')}
+                        {s.key === 'picked_up' && 'Your food is en route — almost there!'}
                         {s.key === 'delivered' && 'Enjoy your meal!'}
                       </p>
                     )}

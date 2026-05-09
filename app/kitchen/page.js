@@ -25,11 +25,12 @@ function formatElapsed(ms) {
   return `${m}:${String(sec).padStart(2, '0')}`
 }
 
-function OrderCard({ order, onAccept, onReady, onDispatch, onPriority, now }) {
+function OrderCard({ order, onAccept, onReady, onDispatch, onPickedUp, onPriority, now }) {
   const TypeIcon = TYPE_ICONS[order.type] || ShoppingBag
   const createdMs = now - new Date(order.created_at).getTime()
   const acceptedMs = order.accepted_at ? now - new Date(order.accepted_at).getTime() : 0
   const readyMs = order.ready_at ? now - new Date(order.ready_at).getTime() : 0
+  const courierRequestedMs = order.courier_requested_at ? now - new Date(order.courier_requested_at).getTime() : 0
 
   const isLate = createdMs > 15 * 60 * 1000 && order.status !== 'ready'
   const isUrgent = createdMs > 25 * 60 * 1000 || order.priority
@@ -38,6 +39,16 @@ function OrderCard({ order, onAccept, onReady, onDispatch, onPriority, now }) {
 
   const provider = order.delivery_method || order.delivery_provider
   const providerInfo = provider ? PROVIDER_LABEL[provider] : null
+  const isDelivery = order.type === 'delivery'
+
+  // Predictive dispatch logic
+  const courierAlreadyRequested = isDelivery && ['courier_requested', 'courier_assigned', 'picked_up', 'on_the_way', 'delivered'].includes(order.delivery_status)
+  const prepTime = parseInt(order.prep_time_total) || 15
+  const courierEta = parseInt(order.courier_eta) || 0
+  const dispatchAtMin = Math.max(0, prepTime - courierEta)
+  const elapsedPrepMin = order.accepted_at ? acceptedMs / 60000 : 0
+  const minutesUntilDispatch = Math.max(0, dispatchAtMin - elapsedPrepMin)
+  const shouldRecommendDispatch = isDelivery && order.status === 'preparing' && !courierAlreadyRequested && courierEta > 0 && elapsedPrepMin >= dispatchAtMin
 
   return (
     <Card className={`p-4 border-l-4 ${accentColor} ${isUrgent ? 'ring-2 ring-destructive animate-pulse' : isLate ? 'ring-1 ring-amber-500' : ''}`}>
@@ -58,6 +69,11 @@ function OrderCard({ order, onAccept, onReady, onDispatch, onPriority, now }) {
               </span>
             )}
             {order.priority && <span className="text-destructive flex items-center gap-1"><Flame className="h-3 w-3" /> PRIORITY</span>}
+            {courierAlreadyRequested && order.delivery_status === 'courier_requested' && (
+              <span className="px-2 py-0.5 rounded-sm font-bold tracking-wide bg-purple-500/15 text-purple-700 dark:text-purple-300 flex items-center gap-1">
+                <Bike className="h-3 w-3" /> COURIER CALLED
+              </span>
+            )}
           </div>
         </div>
         <div className="text-right">
@@ -101,23 +117,68 @@ function OrderCard({ order, onAccept, onReady, onDispatch, onPriority, now }) {
         <p className="text-xs text-green-500 mb-2">✓ Ready for {formatElapsed(readyMs)}</p>
       )}
 
-      <div className="flex gap-2 mt-3">
+      {/* Predictive dispatch info — only delivery in preparing without courier called yet */}
+      {isDelivery && order.status === 'preparing' && !courierAlreadyRequested && courierEta > 0 && (
+        <div className={`my-2 p-2 rounded-md text-xs border ${shouldRecommendDispatch ? 'bg-primary/15 border-primary text-primary animate-pulse' : 'bg-muted/40 border-border'}`}>
+          {shouldRecommendDispatch ? (
+            <div className="flex items-center gap-2 font-semibold">
+              <Bell className="h-3.5 w-3.5" />
+              <span>Recommended to dispatch courier now</span>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Prep ~{prepTime}min · Courier ETA ~{courierEta}min</span>
+              <span className="text-foreground font-semibold">Dispatch in {Math.ceil(minutesUntilDispatch)}min</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Courier requested badge */}
+      {isDelivery && courierAlreadyRequested && order.delivery_status !== 'picked_up' && order.delivery_status !== 'on_the_way' && order.delivery_status !== 'delivered' && (
+        <div className="my-2 p-2 rounded-md text-xs bg-purple-500/10 border border-purple-500/30 text-purple-700 dark:text-purple-300 flex items-center gap-2">
+          <Bike className="h-3.5 w-3.5" />
+          <span>Courier called {courierRequestedMs ? formatElapsed(courierRequestedMs) : 'just now'} ago{courierEta ? ` · ETA ~${courierEta}min` : ''}</span>
+        </div>
+      )}
+
+      {/* Waiting for courier — food ready before courier arrives */}
+      {isDelivery && order.status === 'ready' && courierAlreadyRequested && (
+        <div className="my-2 p-2 rounded-md text-xs bg-amber-500/15 border border-amber-500/40 text-amber-800 dark:text-amber-300 flex items-center gap-2 font-semibold">
+          <Clock className="h-3.5 w-3.5" />
+          <span>Waiting for Courier</span>
+        </div>
+      )}
+
+      <div className="flex gap-2 mt-3 flex-wrap">
         {order.status === 'received' && (
           <Button onClick={() => onAccept(order.id)} className="flex-1 h-11 bg-blue-600 hover:bg-blue-700 text-white">
             <ChefHat className="h-4 w-4 mr-1" /> Accept & Start
           </Button>
         )}
         {order.status === 'preparing' && (
-          <Button onClick={() => onReady(order.id)} className="flex-1 h-11 bg-green-600 hover:bg-green-700 text-white">
-            <PackageCheck className="h-4 w-4 mr-1" /> Mark Ready
+          <>
+            {isDelivery && !courierAlreadyRequested && (
+              <Button onClick={() => onDispatch(order)} className={`flex-1 h-11 ${shouldRecommendDispatch ? 'bg-primary hover:bg-primary/90' : 'bg-purple-600 hover:bg-purple-700 text-white'}`}>
+                <Bike className="h-4 w-4 mr-1" /> Call Courier
+              </Button>
+            )}
+            <Button onClick={() => onReady(order.id)} className="flex-1 h-11 bg-green-600 hover:bg-green-700 text-white">
+              <PackageCheck className="h-4 w-4 mr-1" /> Mark Ready
+            </Button>
+          </>
+        )}
+        {order.status === 'ready' && isDelivery && courierAlreadyRequested && (
+          <Button onClick={() => onPickedUp(order.id)} className="flex-1 h-11 bg-primary">
+            <Truck className="h-4 w-4 mr-1" /> Mark Picked Up
           </Button>
         )}
-        {order.status === 'ready' && order.type === 'delivery' && (
+        {order.status === 'ready' && isDelivery && !courierAlreadyRequested && (
           <Button onClick={() => onDispatch(order)} className="flex-1 h-11 bg-primary">
             <Bike className="h-4 w-4 mr-1" /> Dispatch Courier
           </Button>
         )}
-        {order.status === 'ready' && order.type !== 'delivery' && (
+        {order.status === 'ready' && !isDelivery && (
           <Button onClick={() => onDispatch(order)} className="flex-1 h-11 bg-primary">
             <CheckCircle2 className="h-4 w-4 mr-1" /> Hand Over
           </Button>
@@ -213,6 +274,14 @@ function KitchenPage() {
       // pickup / dine-in: just mark delivered directly
       updateOrder(order.id, { status: 'delivered' })
     }
+  }
+
+  const handlePickedUp = async (id) => {
+    const res = await fetch(`/api/orders/${id}/picked-up`, {
+      method: 'POST', headers: { 'x-admin-token': token },
+    })
+    if (res.ok) { toast.success('Marked as picked up'); fetchOrders() }
+    else toast.error('Failed to mark picked up')
   }
 
   const login = async (e) => {
@@ -312,6 +381,7 @@ function KitchenPage() {
                   onAccept={(id) => updateOrder(id, { status: 'preparing' })}
                   onReady={(id) => updateOrder(id, { status: 'ready' })}
                   onDispatch={handleDispatch}
+                  onPickedUp={handlePickedUp}
                   onPriority={(id, p) => updateOrder(id, { priority: p })}
                 />
               ))}
@@ -331,6 +401,7 @@ function KitchenPage() {
                   onAccept={(id) => updateOrder(id, { status: 'preparing' })}
                   onReady={(id) => updateOrder(id, { status: 'ready' })}
                   onDispatch={handleDispatch}
+                  onPickedUp={handlePickedUp}
                   onPriority={(id, p) => updateOrder(id, { priority: p })}
                 />
               ))}
@@ -350,6 +421,7 @@ function KitchenPage() {
                   onAccept={(id) => updateOrder(id, { status: 'preparing' })}
                   onReady={(id) => updateOrder(id, { status: 'ready' })}
                   onDispatch={handleDispatch}
+                  onPickedUp={handlePickedUp}
                   onPriority={(id, p) => updateOrder(id, { priority: p })}
                 />
               ))}

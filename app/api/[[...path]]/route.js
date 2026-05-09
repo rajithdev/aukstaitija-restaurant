@@ -251,6 +251,21 @@ async function handleRoute(request, { params }) {
       const discount = body.discount || 0
       const total = +(subtotal + tax + deliveryFee - discount).toFixed(2)
 
+      // Compute prep_time_total = max prep_time across items (kitchen parallel cooking)
+      let prepTimeTotal = 0
+      try {
+        const dishIds = body.items.map(i => i.id).filter(Boolean)
+        if (dishIds.length > 0) {
+          const dishDocs = await db.collection('dishes').find({ id: { $in: dishIds } }).toArray()
+          const dishPrepMap = Object.fromEntries(dishDocs.map(d => [d.id, parseInt(d.prep_time) || 15]))
+          for (const i of body.items) {
+            const p = dishPrepMap[i.id] || parseInt(i.prep_time) || 15
+            if (p > prepTimeTotal) prepTimeTotal = p
+          }
+        }
+        if (!prepTimeTotal) prepTimeTotal = 15
+      } catch (e) { prepTimeTotal = 15 }
+
       // Dine-in flow: link or create table session
       let sessionId = null
       let tableNumber = null
@@ -295,8 +310,10 @@ async function handleRoute(request, { params }) {
         delivery_zone_id: deliveryZone?.id || null,
         delivery_zone_name: deliveryZone?.name || null,
         courier_eta: courierEta,
+        prep_time_total: body.type === 'delivery' ? prepTimeTotal : null,
         courier_tracking_url: null,
         courier_reference_id: null,
+        courier_requested_at: null,
         courier_assigned_at: null,
         picked_up_at: null,
         notes: body.notes || '',
@@ -795,6 +812,8 @@ async function handleRoute(request, { params }) {
 
     // ---------------- Order Dispatch (admin) ----------------
     // POST /orders/:id/dispatch  body: { provider }
+    // Predictive dispatch: callable while order.status is 'preparing' OR 'ready'.
+    // Sets delivery_status='courier_requested'; does NOT advance order.status until pickup.
     if (path[0] === 'orders' && path.length === 3 && path[2] === 'dispatch' && method === 'POST') {
       if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
       const body = await request.json()
@@ -803,19 +822,23 @@ async function handleRoute(request, { params }) {
       const order = await db.collection('orders').findOne({ id: path[1] })
       if (!order) return handleCORS(NextResponse.json({ error: 'Order not found' }, { status: 404 }))
       if (order.type !== 'delivery') return handleCORS(NextResponse.json({ error: 'Not a delivery order' }, { status: 400 }))
-      if (order.status !== 'ready') return handleCORS(NextResponse.json({ error: 'Order must be Ready before dispatch' }, { status: 400 }))
+      if (!['preparing', 'ready'].includes(order.status)) {
+        return handleCORS(NextResponse.json({ error: 'Order must be Preparing or Ready before dispatch' }, { status: 400 }))
+      }
+      if (['courier_requested', 'picked_up', 'on_the_way', 'delivered'].includes(order.delivery_status)) {
+        return handleCORS(NextResponse.json({ error: 'Courier already requested for this order' }, { status: 400 }))
+      }
 
       const courierResp = await createCourierRequest(provider, order)
       const update = {
         delivery_method: provider,
         delivery_provider: provider,
-        delivery_status: 'courier_assigned',
+        delivery_status: 'courier_requested',
         courier_reference_id: courierResp.courier_reference_id,
         courier_tracking_url: courierResp.tracking_url,
         courier_eta: courierResp.courier_eta || order.courier_eta,
+        courier_requested_at: new Date(),
         courier_assigned_at: new Date(),
-        status: 'out',
-        out_at: new Date(),
         updated_at: new Date(),
       }
       await db.collection('orders').updateOne({ id: path[1] }, { $set: update })
@@ -823,10 +846,16 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json({ ok: true, manual: courierResp.manual, order: stripId(updated) }))
     }
 
-    // POST /orders/:id/picked-up (admin) — courier picked up
+    // POST /orders/:id/picked-up (admin) — courier picked up the food and left
     if (path[0] === 'orders' && path.length === 3 && path[2] === 'picked-up' && method === 'POST') {
       if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
-      await db.collection('orders').updateOne({ id: path[1] }, { $set: { delivery_status: 'on_the_way', picked_up_at: new Date(), updated_at: new Date() } })
+      await db.collection('orders').updateOne({ id: path[1] }, { $set: {
+        delivery_status: 'picked_up',
+        status: 'out',
+        picked_up_at: new Date(),
+        out_at: new Date(),
+        updated_at: new Date(),
+      } })
       const updated = await db.collection('orders').findOne({ id: path[1] })
       return handleCORS(NextResponse.json(stripId(updated)))
     }
