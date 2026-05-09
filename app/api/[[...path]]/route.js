@@ -333,9 +333,17 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json(stripId(order)))
     }
 
-    // GET /orders/:id
+    // GET /orders/:id  — supports both UUID (id) and human order_number (e.g. AK020909)
     if (path[0] === 'orders' && path.length === 2 && method === 'GET') {
-      const order = await db.collection('orders').findOne({ id: path[1] })
+      const key = path[1]
+      // Order number is case-insensitive; UUID lookup is exact for backward compat.
+      const order = await db.collection('orders').findOne({
+        $or: [
+          { id: key },
+          { order_number: key },
+          { order_number: key.toUpperCase() },
+        ]
+      })
       if (!order) return handleCORS(NextResponse.json({ error: 'Not found' }, { status: 404 }))
       return handleCORS(NextResponse.json(stripId(order)))
     }

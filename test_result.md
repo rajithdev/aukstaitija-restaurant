@@ -427,6 +427,21 @@ backend:
           agent: "testing"
           comment: "✅ PASS - All regression tests passed: (1) GET /api/categories returns 5 ✅ (2) GET /api/dishes returns array of 10 dishes ✅ (3) POST /api/admin/login with password 'admin123' returns token ✅ (4) GET /api/kitchen/orders with admin returns array (6 active orders) ✅ (5) POST /api/reservations with valid body creates reservation with RES prefix ✅"
 
+  - task: "Dual-key order lookup (GET /api/orders/:id supports UUID and order_number)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "GET /api/orders/:id now supports lookup by either UUID (id field) or human-friendly order_number (format AK + 6 digits). Order_number lookups are case-insensitive (uppercase conversion)."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - All dual-key lookup scenarios verified (7/7 - 100% success): (1) Order creation generates valid order_number matching ^AK\\d{6}$ regex ✅ (2) GET by UUID returns correct order (backward compatibility) ✅ (3) GET by order_number (exact case) returns correct order ✅ (4) GET by order_number (lowercase) returns correct order (case-insensitive support) ✅ (5) GET by non-existent order_number (AK999999) returns 404 with error:'Not found' ✅ (6) GET by non-existent UUID returns 404 ✅ (7) Regression check: response includes id, order_number, prep_time_total, delivery_status ✅"
+
 frontend:
   - task: "Customer pages (home, menu, dish detail, cart, checkout, reservations, order tracking, admin)"
     implemented: true
@@ -704,3 +719,58 @@ agent_communication:
          - PUT status='completed' sets completed_at timestamp ✅
       
       All table lifecycle features working correctly. Backend is production-ready.
+  - agent: "testing"
+    message: |
+      ✅ DUAL-KEY ORDER LOOKUP TESTS - ALL PASSED (7/7 - 100% success rate)
+      
+      Test Run 5 - Dual-Key Order Lookup Feature:
+      
+      **NEW FEATURE TESTED:**
+      
+      GET /api/orders/:id now supports lookup by EITHER:
+      - UUID (id field) - backward compatibility ✅
+      - Order number (order_number field, format AK######) - case-insensitive ✅
+      
+      **TEST SCENARIOS:**
+      
+      1. Order creation (1 test):
+         - POST /api/orders with type='delivery' creates order ✅
+         - order_number matches regex ^AK\d{6}$ (e.g., AK057155) ✅
+         - Response includes both id (UUID) and order_number ✅
+      
+      2. GET by UUID - backward compatibility (1 test):
+         - GET /api/orders/{uuid} returns 200 ✅
+         - Response.id matches captured UUID ✅
+         - Response.order_number matches captured order_number ✅
+      
+      3. GET by order_number - exact case (1 test):
+         - GET /api/orders/AK057155 returns 200 ✅
+         - Response.id matches captured UUID ✅
+         - Response.order_number matches captured order_number ✅
+      
+      4. GET by order_number - case-insensitive (1 test):
+         - GET /api/orders/ak057155 (lowercase) returns 200 ✅
+         - Case-insensitive lookup working correctly ✅
+      
+      5. GET non-existent order_number (1 test):
+         - GET /api/orders/AK999999 returns 404 ✅
+         - Response includes {error: 'Not found'} ✅
+      
+      6. GET non-existent UUID (1 test):
+         - GET /api/orders/00000000-0000-0000-0000-000000000000 returns 404 ✅
+         - Response includes {error: 'Not found'} ✅
+      
+      7. Regression check (1 test):
+         - Response shape includes all required fields ✅
+         - Fields verified: id, order_number, prep_time_total, delivery_status ✅
+      
+      **CRITICAL VERIFICATION:**
+      - ✅ UUID lookup still works (backward compatibility maintained)
+      - ✅ Order_number lookup works with exact case
+      - ✅ Order_number lookup is case-insensitive (lowercase works)
+      - ✅ Non-existent lookups return proper 404 errors
+      - ✅ Response shape includes all required fields
+      - ✅ Order_number format validation (AK + 6 digits)
+      
+      Dual-key order lookup feature implemented correctly and production-ready.
+      No issues found. Backend is stable.

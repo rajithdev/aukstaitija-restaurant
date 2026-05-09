@@ -84,7 +84,8 @@ function CheckoutInner() {
       if (data.id) {
         toast.success('Order sent to kitchen!')
         clearCart()
-        router.push(`/order/${data.id}`)
+        // Redirect using the human-friendly order number (e.g. /order/AK020909)
+        router.push(`/order/${data.order_number || data.id}`)
       } else {
         toast.error(data.error || 'Failed')
       }
