@@ -91,7 +91,16 @@ async function autoUpdateTableStatuses(db) {
       if (t.status !== 'occupied') await setTableStatus(db, t.id, 'occupied')
       continue
     }
-    // Look for assigned reservations within next 2h or in past 30 min
+    // Check for arrived reservations first (customer is here but not seated yet)
+    const arrivedReservation = await db.collection('reservations').findOne({
+      table_id: t.id,
+      status: 'arrived'
+    })
+    if (arrivedReservation) {
+      if (t.status !== 'occupied') await setTableStatus(db, t.id, 'occupied')
+      continue
+    }
+    // Look for assigned reservations (any future reservation or very recent past)
     const reservations = await db.collection('reservations').find({
       table_id: t.id,
       status: { $in: ['confirmed', 'pending'] }
@@ -100,7 +109,8 @@ async function autoUpdateTableStatuses(db) {
     for (const r of reservations) {
       const resDt = new Date(`${r.date}T${r.time}:00`)
       const diff = resDt.getTime() - now.getTime()
-      if (diff > -30 * 60 * 1000 && diff <= 2 * 60 * 60 * 1000) {
+      // Mark as reserved if reservation is in the future or within past 30 min
+      if (diff > -30 * 60 * 1000) {
         isReserved = true
       } else if (diff < -30 * 60 * 1000) {
         // No-show: past 30 min and not checked in

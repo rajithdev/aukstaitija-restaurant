@@ -691,6 +691,101 @@ def test_multiple_reservations_same_time():
         print_fail(f"Exception: {str(e)}")
         return False
 
+# Test 8: No-Show Handling (Edge Case)
+def test_no_show_handling():
+    print_test("8. No-Show Handling (Edge Case)")
+    
+    try:
+        # Get a date 1 hour in the past
+        past_time = datetime.now() - timedelta(hours=1)
+        past_date = past_time.strftime('%Y-%m-%d')
+        past_time_str = past_time.strftime('%H:%M')
+        
+        # Create reservation in the past
+        payload = {
+            "name": "Late Guest",
+            "phone": "+37060088888",
+            "email": "late@example.com",
+            "date": past_date,
+            "time": past_time_str,
+            "guests": 2,
+            "seating_preference": "Window side",
+            "occasion": "Casual dining"
+        }
+        
+        print_info(f"Creating reservation for {past_date} at {past_time_str} (1 hour in the past)...")
+        response = requests.post(f"{BASE_URL}/reservations", json=payload, headers=HEADERS)
+        if response.status_code != 200:
+            print_fail(f"Failed to create reservation: {response.status_code}")
+            return False
+        
+        reservation = response.json()
+        print_pass(f"Reservation created: {reservation.get('id')}")
+        
+        # Assign table
+        print_info("Assigning table 't7' to reservation...")
+        update_response = requests.put(
+            f"{BASE_URL}/reservations/{reservation.get('id')}", 
+            json={"table_id": "t7"}, 
+            headers=ADMIN_HEADERS
+        )
+        
+        if update_response.status_code != 200:
+            print_fail(f"Failed to assign table: {update_response.status_code}")
+            return False
+        print_pass("Table 't7' assigned")
+        
+        # Call GET /api/tables to trigger autoUpdateTableStatuses
+        print_info("Calling GET /api/tables to trigger auto no-show detection...")
+        table_response = requests.get(f"{BASE_URL}/tables", headers=HEADERS)
+        if table_response.status_code != 200:
+            print_fail(f"Failed to get tables: {table_response.status_code}")
+            return False
+        
+        tables = table_response.json()
+        table_t7 = next((t for t in tables if t.get('id') == 't7'), None)
+        
+        if not table_t7:
+            print_fail("Table 't7' not found")
+            return False
+        
+        # Verify table status is 'available' (released after no-show)
+        if table_t7.get('status') != 'available':
+            print_fail(f"Expected table status='available', got '{table_t7.get('status')}'")
+            return False
+        print_pass("Table status is 'available' (released after no-show)")
+        
+        # Verify reservation is marked as 'no_show'
+        print_info("Verifying reservation is marked as 'no_show'...")
+        res_response = requests.get(f"{BASE_URL}/reservations", headers=ADMIN_HEADERS)
+        if res_response.status_code != 200:
+            print_fail(f"Failed to get reservations: {res_response.status_code}")
+            return False
+        
+        all_reservations = res_response.json()
+        updated_reservation = next((r for r in all_reservations if r.get('id') == reservation.get('id')), None)
+        
+        if not updated_reservation:
+            print_fail("Reservation not found")
+            return False
+        
+        if updated_reservation.get('status') != 'no_show':
+            print_fail(f"Expected reservation status='no_show', got '{updated_reservation.get('status')}'")
+            return False
+        print_pass("Reservation status is 'no_show'")
+        
+        if not updated_reservation.get('no_show_at'):
+            print_fail("Expected no_show_at timestamp to be set")
+            return False
+        print_pass(f"no_show_at timestamp set: {updated_reservation.get('no_show_at')}")
+        
+        print_pass("✅ TEST 8 PASSED - No-show handling working correctly")
+        return True
+        
+    except Exception as e:
+        print_fail(f"Exception: {str(e)}")
+        return False
+
 # Main test runner
 def main():
     print("\n" + "="*80)
@@ -705,7 +800,8 @@ def main():
         "Test 4: Arrival Status Handling": False,
         "Test 5: Cancellation and Table Release": False,
         "Test 6: Available Tables Endpoint": False,
-        "Test 7: Multiple Reservations Same Time": False
+        "Test 7: Multiple Reservations Same Time": False,
+        "Test 8: No-Show Handling": False
     }
     
     # Run all tests
@@ -718,6 +814,7 @@ def main():
     results["Test 5: Cancellation and Table Release"] = test_cancellation_table_release()
     results["Test 6: Available Tables Endpoint"] = test_available_tables_endpoint()
     results["Test 7: Multiple Reservations Same Time"] = test_multiple_reservations_same_time()
+    results["Test 8: No-Show Handling"] = test_no_show_handling()
     
     # Print summary
     print("\n" + "="*80)
