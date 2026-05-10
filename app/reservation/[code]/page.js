@@ -6,13 +6,15 @@ import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import ReservationTimeline, {
   STATUS_HEADLINES, STATUS_SUBTEXT, isTableRevealed,
 } from '@/components/ReservationTimeline'
 import {
   Calendar, Clock, Users, MapPin, RefreshCw, Search, Copy, Check,
-  AlertCircle, Home,
+  AlertCircle, Home, Edit2, X,
 } from 'lucide-react'
+import { toast } from 'sonner'
 
 const REFRESH_MS = 5000 // Live tracker requirement: refresh every 5s
 
@@ -85,6 +87,8 @@ function ReservationTrackerPage() {
   const [refreshing, setRefreshing] = useState(false)
   const previousStatus = useRef(null)
   const [statusJustChanged, setStatusJustChanged] = useState(false)
+  const [showCancelModal, setShowCancelModal] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
 
   const fetchReservation = useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
@@ -123,6 +127,48 @@ function ReservationTrackerPage() {
     if (!code) return
     try { localStorage.setItem('latest_reservation_code', code) } catch {}
   }, [code])
+
+  // Calculate cutoff times
+  const getTimeUntilReservation = (res) => {
+    if (!res || !res.date || !res.time) return null
+    const resTime = new Date(`${res.date}T${res.time}:00`)
+    return resTime.getTime() - Date.now()
+  }
+
+  const canEdit = (res) => {
+    const timeUntil = getTimeUntilReservation(res)
+    if (!timeUntil) return false
+    // 2 hours = 7200000 ms
+    return timeUntil > 2 * 60 * 60 * 1000 && !['cancelled', 'no_show', 'completed'].includes(res.status)
+  }
+
+  const canCancel = (res) => {
+    const timeUntil = getTimeUntilReservation(res)
+    if (!timeUntil) return false
+    // 1 hour = 3600000 ms
+    return timeUntil > 60 * 60 * 1000 && !['cancelled', 'no_show', 'completed'].includes(res.status)
+  }
+
+  const handleCancel = async () => {
+    setCancelling(true)
+    try {
+      const res = await fetch(`/api/reservations/by-code/${encodeURIComponent(code)}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        toast.error(data.error || 'Failed to cancel reservation')
+        return
+      }
+      toast.success('Your reservation has been cancelled successfully.')
+      setShowCancelModal(false)
+      fetchReservation()
+    } catch (e) {
+      toast.error('Failed to cancel reservation')
+    } finally {
+      setCancelling(false)
+    }
+  }
 
   // Initial load + 5s polling for live status. Stops polling once the
   // reservation reaches a terminal state to avoid wasted requests.
@@ -336,6 +382,43 @@ function ReservationTrackerPage() {
           )}
         </Card>
 
+        {/* Customer self-service actions */}
+        {!interrupted && (
+          <div className="flex flex-wrap gap-3 justify-center mb-6">
+            {canEdit(reservation) ? (
+              <Link href={`/reservations?edit=${code}`}>
+                <Button variant="outline" size="lg" className="border-primary/30 text-primary hover:bg-primary/10">
+                  <Edit2 className="h-4 w-4 mr-2" /> Edit Reservation
+                </Button>
+              </Link>
+            ) : reservation.status !== 'cancelled' && (
+              <div className="text-center max-w-md">
+                <Button variant="outline" size="lg" disabled className="opacity-50">
+                  <Edit2 className="h-4 w-4 mr-2" /> Edit Reservation
+                </Button>
+                <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+                  For last-minute changes, please contact the restaurant directly so we can assist you personally.
+                </p>
+              </div>
+            )}
+            
+            {canCancel(reservation) ? (
+              <Button 
+                variant="ghost" 
+                size="lg"
+                onClick={() => setShowCancelModal(true)}
+                className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+              >
+                <X className="h-4 w-4 mr-2" /> Cancel Reservation
+              </Button>
+            ) : reservation.status !== 'cancelled' && (
+              <Button variant="ghost" size="lg" disabled className="opacity-50">
+                <X className="h-4 w-4 mr-2" /> Cancel Reservation
+              </Button>
+            )}
+          </div>
+        )}
+
         {/* Helpful actions */}
         <div className="flex flex-wrap gap-2 justify-center">
           <Link href="/reservation-lookup">
@@ -347,6 +430,42 @@ function ReservationTrackerPage() {
             <Button variant="ghost" size="sm">Browse menu</Button>
           </Link>
         </div>
+
+        {/* Cancellation Confirmation Modal */}
+        <Dialog open={showCancelModal} onOpenChange={setShowCancelModal}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="font-serif text-2xl">Cancel Reservation</DialogTitle>
+              <DialogDescription className="text-base leading-relaxed pt-2">
+                Your reservation will be released immediately and your table will become available for other guests.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="bg-muted/40 rounded-lg p-4 my-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 text-muted-foreground mt-0.5" />
+                <div className="text-sm text-muted-foreground leading-relaxed">
+                  This action cannot be undone. You'll need to make a new reservation if you change your mind.
+                </div>
+              </div>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button 
+                variant="outline" 
+                onClick={() => setShowCancelModal(false)}
+                disabled={cancelling}
+              >
+                Keep Reservation
+              </Button>
+              <Button 
+                variant="destructive" 
+                onClick={handleCancel}
+                disabled={cancelling}
+              >
+                {cancelling ? 'Cancelling...' : 'Confirm Cancellation'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {!reservation.has_user && (
           <p className="text-center text-xs text-muted-foreground mt-6 max-w-md mx-auto">

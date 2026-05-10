@@ -1174,6 +1174,55 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json(publicReservationView(ensured, table)))
     }
 
+    // DELETE /reservations/by-code/:code — customer self-service cancellation
+    // Allows customers to cancel their own reservation using the reservation code
+    // Checks 1-hour cutoff before reservation time
+    if (path[0] === 'reservations' && path[1] === 'by-code' && path.length === 3 && method === 'DELETE') {
+      const raw = decodeURIComponent(path[2] || '').trim().toUpperCase()
+      if (!raw) return handleCORS(NextResponse.json({ error: 'Code required' }, { status: 400 }))
+      const candidates = [raw]
+      if (!raw.startsWith('RSV-')) candidates.push(`RSV-${raw}`)
+      
+      const reservation = await db.collection('reservations').findOne({
+        $or: [
+          { reservation_code: { $in: candidates } },
+          { confirmation: raw },
+        ]
+      })
+      
+      if (!reservation) return handleCORS(NextResponse.json({ error: 'Reservation not found' }, { status: 404 }))
+      
+      // Check if already cancelled
+      if (reservation.status === 'cancelled') {
+        return handleCORS(NextResponse.json({ error: 'Reservation is already cancelled' }, { status: 400 }))
+      }
+      
+      // Check 1-hour cutoff
+      const reservationTime = new Date(`${reservation.date}T${reservation.time}:00`)
+      const now = new Date()
+      const hoursUntil = (reservationTime.getTime() - now.getTime()) / (1000 * 60 * 60)
+      
+      if (hoursUntil < 1) {
+        return handleCORS(NextResponse.json({ 
+          error: 'Cannot cancel within 1 hour of reservation time. Please contact the restaurant.' 
+        }, { status: 400 }))
+      }
+      
+      // Cancel the reservation
+      await db.collection('reservations').updateOne(
+        { id: reservation.id },
+        { 
+          $set: { 
+            status: 'cancelled', 
+            cancelled_at: new Date(),
+            table_id: null // Release the table
+          } 
+        }
+      )
+      
+      return handleCORS(NextResponse.json({ ok: true, message: 'Reservation cancelled successfully' }))
+    }
+
     // POST /reservations/lookup — guest recovery. Body { phone? | email? }
     // Returns up to 10 most recent matching reservations as the public view
     // (no PII leak). Either phone OR email must be provided.
