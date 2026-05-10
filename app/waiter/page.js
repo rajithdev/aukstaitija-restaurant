@@ -22,38 +22,33 @@ function formatElapsed(ms) {
   return `${m}:${String(sec).padStart(2, '0')}`
 }
 
-function NotificationCard({ notif, now, onPickUp, onServe, onReturn }) {
+function NotificationCard({ notif, now, onServe }) {
   const createdMs = now - new Date(notif.created_at).getTime()
-  const inService = notif.status === 'picked_up'
-  const pickedMs = notif.picked_up_at ? now - new Date(notif.picked_up_at).getTime() : 0
 
-  const isFresh = !inService && createdMs < HIGHLIGHT_MS
-  const isLate = !inService && createdMs > 5 * 60 * 1000
-  const isUrgent = !inService && createdMs > 8 * 60 * 1000
+  const isFresh = createdMs < HIGHLIGHT_MS
+  const isLate = createdMs > 5 * 60 * 1000
+  const isUrgent = createdMs > 8 * 60 * 1000
 
-  // Per-state ring/glow palette — fresh = amber pulse, in-service = sky, late
-  // states override with amber/red as they grow more urgent.
-  const ring = inService
-    ? 'ring-1 ring-sky-400/40 shadow-[0_0_38px_-10px_rgba(56,189,248,0.45)]'
-    : isUrgent
-      ? 'ring-2 ring-red-500/70 animate-[pulse_1.4s_ease-in-out_infinite] shadow-[0_0_45px_-10px_rgba(239,68,68,0.55)]'
-      : isLate
-        ? 'ring-1 ring-amber-500/60 shadow-[0_0_34px_-10px_rgba(245,158,11,0.45)]'
-        : isFresh
-          ? 'ring-2 ring-amber-300/70 shadow-[0_0_45px_-8px_rgba(212,165,74,0.65)] animate-[pulse_1.6s_ease-in-out_infinite]'
-          : 'ring-1 ring-emerald-400/40 shadow-[0_0_34px_-10px_rgba(16,185,129,0.4)]'
+  // Ring/glow palette for urgency levels
+  const ring = isUrgent
+    ? 'ring-2 ring-red-500/70 animate-[pulse_1.4s_ease-in-out_infinite] shadow-[0_0_45px_-10px_rgba(239,68,68,0.55)]'
+    : isLate
+      ? 'ring-1 ring-amber-500/60 shadow-[0_0_34px_-10px_rgba(245,158,11,0.45)]'
+      : isFresh
+        ? 'ring-2 ring-emerald-300/70 shadow-[0_0_45px_-8px_rgba(16,185,129,0.65)] animate-[pulse_1.6s_ease-in-out_infinite]'
+        : 'ring-1 ring-emerald-400/40 shadow-[0_0_34px_-10px_rgba(16,185,129,0.4)]'
 
   return (
     <div className={`relative overflow-hidden rounded-2xl bg-zinc-950/70 backdrop-blur-xl ${ring} transition-all hover:-translate-y-0.5`}>
       {isFresh && (
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/80 to-transparent" />
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/80 to-transparent" />
       )}
 
       <div className="p-5">
         <div className="flex items-start justify-between mb-3 gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="bg-gradient-to-b from-amber-300 to-amber-500 text-zinc-950 px-3 py-1 rounded-md font-bold tracking-wide text-sm shadow-lg shadow-amber-500/30">
+              <span className="bg-gradient-to-b from-amber-300 to-amber-500 text-zinc-950 px-4 py-1.5 rounded-md font-bold tracking-wide text-lg shadow-lg shadow-amber-500/30">
                 {notif.table_name || 'Table ?'}
               </span>
               <span className="text-xs text-zinc-400 font-mono">#{notif.order_number}</span>
@@ -63,39 +58,23 @@ function NotificationCard({ notif, now, onPickUp, onServe, onReturn }) {
                 </span>
               )}
               {isFresh && (
-                <span className="bg-amber-400/20 text-amber-200 px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider uppercase flex items-center gap-1 ring-1 ring-amber-300/40">
+                <span className="bg-emerald-400/20 text-emerald-200 px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider uppercase flex items-center gap-1 ring-1 ring-emerald-300/40">
                   <Sparkles className="h-3 w-3" /> New
                 </span>
               )}
-              {inService && (
-                <span className="bg-sky-500/15 text-sky-200 px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider uppercase flex items-center gap-1 ring-1 ring-sky-400/30">
-                  <Hand className="h-3 w-3" /> In service
-                </span>
-              )}
             </div>
-            <p className="mt-2 text-xs text-zinc-400">{notif.customer_name || 'Guest'}</p>
+            <p className="mt-2 text-sm text-zinc-400">{notif.customer_name || 'Guest'}</p>
           </div>
           <div className="text-right shrink-0">
-            {!inService ? (
-              <>
-                <div className={`flex items-center justify-end gap-1.5 font-mono text-2xl tabular-nums ${isUrgent ? 'text-red-400' : isLate ? 'text-amber-300' : 'text-zinc-100'}`}>
-                  <Clock className="h-4 w-4 opacity-70" /> {formatElapsed(createdMs)}
-                </div>
-                <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-0.5">since ready</p>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center justify-end gap-1.5 font-mono text-2xl tabular-nums text-sky-300">
-                  <Hand className="h-4 w-4 opacity-70" /> {formatElapsed(pickedMs)}
-                </div>
-                <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-0.5">in your hand</p>
-              </>
-            )}
+            <div className={`flex items-center justify-end gap-1.5 font-mono text-2xl tabular-nums ${isUrgent ? 'text-red-400' : isLate ? 'text-amber-300' : 'text-emerald-300'}`}>
+              <Clock className="h-5 w-5 opacity-70" /> {formatElapsed(createdMs)}
+            </div>
+            <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-0.5">since ready</p>
           </div>
         </div>
 
         {/* Items summary */}
-        <div className="mb-3 px-3 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-sm text-zinc-100">
+        <div className="mb-3 px-3 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-sm text-zinc-100 font-medium">
           {notif.items_summary || '—'}
         </div>
 
@@ -109,26 +88,13 @@ function NotificationCard({ notif, now, onPickUp, onServe, onReturn }) {
           </div>
         )}
 
-        {/* Actions */}
-        <div className="flex gap-2 mt-3">
-          {!inService ? (
-            <Button onClick={() => onPickUp(notif.id)} className="flex-1 h-12 text-[15px] font-semibold bg-gradient-to-b from-sky-500 to-sky-700 hover:from-sky-400 hover:to-sky-600 text-white shadow-lg shadow-sky-500/30 border-0">
-              <Hand className="h-4 w-4 mr-2" /> Pick Up
-            </Button>
-          ) : (
-            <Button onClick={() => onReturn(notif.id)} variant="outline" className="h-12 px-4 bg-white/5 hover:bg-white/10 border-white/10 text-zinc-300" title="Put back on pass">
-              ← Back
-            </Button>
-          )}
-          <Button
-            onClick={() => onServe(notif.id)}
-            className={`flex-1 h-12 text-[15px] font-semibold border-0 ${inService
-              ? 'bg-gradient-to-b from-emerald-500 to-emerald-700 hover:from-emerald-400 hover:to-emerald-600 text-white shadow-lg shadow-emerald-500/30'
-              : 'bg-gradient-to-b from-amber-300 to-amber-500 hover:from-amber-200 hover:to-amber-400 text-zinc-950 shadow-lg shadow-amber-500/30'}`}
-          >
-            <CheckCircle2 className="h-4 w-4 mr-2" /> Mark Served
-          </Button>
-        </div>
+        {/* Single Action Button - Served */}
+        <Button
+          onClick={() => onServe(notif.id)}
+          className="w-full h-14 text-base font-semibold bg-gradient-to-b from-emerald-500 to-emerald-700 hover:from-emerald-400 hover:to-emerald-600 text-white shadow-lg shadow-emerald-500/30 border-0"
+        >
+          <CheckCircle2 className="h-5 w-5 mr-2" /> Served
+        </Button>
       </div>
     </div>
   )
@@ -211,29 +177,19 @@ function WaiterPage() {
   }, [token])
 
   const pickUp = async (id) => {
-    const res = await fetch(`/api/waiter/notifications/${id}/pickup`, {
-      method: 'POST', headers: { 'x-admin-token': token },
-    })
-    if (res.ok) { toast.success('Picked up'); fetchNotifs() }
-    else toast.error('Failed to pick up')
+    // Removed - no longer needed in simplified workflow
   }
 
   const serve = async (id) => {
     const res = await fetch(`/api/waiter/notifications/${id}/served`, {
       method: 'POST', headers: { 'x-admin-token': token },
     })
-    if (res.ok) { toast.success('Served — enjoy!'); fetchNotifs() }
+    if (res.ok) { toast.success('✅ Served!'); fetchNotifs() }
     else toast.error('Failed to mark served')
   }
 
-  // "Back" — manually return a plate to the pass. Calls pickup endpoint with a
-  // small client-side optimistic revert; server side, we just hit the same
-  // /pickup PATH but with a query flag. Simpler approach: do nothing on the
-  // server, just refetch — but we want the order's serve_status reset. For
-  // now, we surface a toast and ask kitchen to redo — keep the UX honest.
   const returnToPass = async (id) => {
-    toast.info('To return a plate, ask kitchen to re-mark it ready.')
-    fetchNotifs()
+    // Removed - no longer needed in simplified workflow
   }
 
   const login = async (e) => {
@@ -248,8 +204,8 @@ function WaiterPage() {
     } else { toast.error('Invalid password') }
   }
 
-  const pending = useMemo(() => notifs.filter(n => n.status === 'pending'), [notifs])
-  const inService = useMemo(() => notifs.filter(n => n.status === 'picked_up'), [notifs])
+  // Only show pending (ready) orders - removed inService filter
+  const ready = useMemo(() => notifs.filter(n => n.status === 'pending'), [notifs])
 
   if (!token) {
     return (
@@ -331,90 +287,55 @@ function WaiterPage() {
       </header>
 
       <div className="container mx-auto px-6 py-6">
-        {/* Stats strip */}
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <div className="rounded-2xl bg-zinc-950/60 ring-1 ring-amber-400/30 p-5 shadow-[0_0_28px_-12px_rgba(212,165,74,0.45)]">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-amber-400/15 ring-1 ring-amber-400/30 flex items-center justify-center">
-                <Bell className="h-5 w-5 text-amber-300" />
+        {/* Stats strip - simplified */}
+        <div className="rounded-2xl bg-zinc-950/60 ring-1 ring-emerald-400/30 p-6 shadow-[0_0_32px_-12px_rgba(16,185,129,0.5)] mb-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="h-12 w-12 rounded-xl bg-emerald-400/15 ring-1 ring-emerald-400/30 flex items-center justify-center">
+                <Bell className="h-6 w-6 text-emerald-300" />
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-zinc-500">Pending pickup</p>
-                <p className="font-serif text-4xl text-amber-200 leading-none mt-1">{pending.length}</p>
+                <p className="text-[11px] uppercase tracking-[0.3em] text-zinc-500">Ready to serve</p>
+                <p className="font-serif text-5xl text-emerald-200 leading-none mt-1">{ready.length}</p>
               </div>
             </div>
-          </div>
-          <div className="rounded-2xl bg-zinc-950/60 ring-1 ring-sky-400/30 p-5 shadow-[0_0_28px_-12px_rgba(56,189,248,0.4)]">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-sky-400/15 ring-1 ring-sky-400/30 flex items-center justify-center">
-                <Hand className="h-5 w-5 text-sky-300" />
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-zinc-500">In service</p>
-                <p className="font-serif text-4xl text-sky-200 leading-none mt-1">{inService.length}</p>
-              </div>
-            </div>
+            <p className="text-sm text-zinc-400">
+              {ready.length === 0 ? 'All caught up!' : ready.length === 1 ? '1 order waiting' : `${ready.length} orders waiting`}
+            </p>
           </div>
         </div>
 
-        {/* Two-column board */}
-        <div className="grid lg:grid-cols-2 gap-5">
-          <div>
-            <div className="flex items-center justify-between mb-4 px-1">
-              <div className="flex items-center gap-3">
-                <div className="h-9 w-9 rounded-xl bg-amber-400/15 ring-1 ring-amber-400/30 flex items-center justify-center">
-                  <PackageCheck className="h-4 w-4 text-amber-300" />
-                </div>
-                <div>
-                  <h2 className="font-serif text-2xl text-zinc-50 tracking-tight leading-none">Pending Pickup</h2>
-                  <p className="text-[10px] uppercase tracking-[0.3em] text-zinc-500 mt-1">{pending.length} waiting</p>
-                </div>
+        {/* Single column - Ready to Serve */}
+        <div>
+          <div className="flex items-center justify-between mb-5 px-1">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-emerald-400/15 ring-1 ring-emerald-400/30 flex items-center justify-center">
+                <PackageCheck className="h-5 w-5 text-emerald-300" />
               </div>
-              <span className="font-mono text-3xl tabular-nums text-amber-300">{String(pending.length).padStart(2, '0')}</span>
+              <div>
+                <h2 className="font-serif text-3xl text-zinc-50 tracking-tight leading-none">Ready to Serve</h2>
+                <p className="text-[11px] uppercase tracking-[0.3em] text-zinc-500 mt-1">One tap to complete</p>
+              </div>
             </div>
-            <div className="space-y-4">
-              {pending.length === 0 && (
-                <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] py-16 px-6 text-center">
-                  <Bell className="h-7 w-7 mx-auto text-zinc-600 mb-2 opacity-60" />
-                  <p className="text-sm text-zinc-500">Nothing on the pass right now</p>
-                  <p className="text-xs text-zinc-600 mt-1">Plates will appear here automatically when the kitchen marks them ready.</p>
-                </div>
-              )}
-              {pending.map(n => (
-                <NotificationCard key={n.id} notif={n} now={now} onPickUp={pickUp} onServe={serve} onReturn={returnToPass} />
-              ))}
-            </div>
+            <span className="font-mono text-4xl tabular-nums text-emerald-300">{String(ready.length).padStart(2, '0')}</span>
           </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-4 px-1">
-              <div className="flex items-center gap-3">
-                <div className="h-9 w-9 rounded-xl bg-sky-400/15 ring-1 ring-sky-400/30 flex items-center justify-center">
-                  <Hand className="h-4 w-4 text-sky-300" />
-                </div>
-                <div>
-                  <h2 className="font-serif text-2xl text-zinc-50 tracking-tight leading-none">In Service</h2>
-                  <p className="text-[10px] uppercase tracking-[0.3em] text-zinc-500 mt-1">{inService.length} carrying</p>
-                </div>
+          
+          <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {ready.length === 0 && (
+              <div className="col-span-full rounded-2xl border border-dashed border-white/10 bg-white/[0.02] py-20 px-6 text-center">
+                <Bell className="h-10 w-10 mx-auto text-zinc-600 mb-3 opacity-60" />
+                <p className="text-lg text-zinc-400 font-medium">Nothing ready right now</p>
+                <p className="text-sm text-zinc-600 mt-2">Orders will appear here automatically when the kitchen marks them ready.</p>
               </div>
-              <span className="font-mono text-3xl tabular-nums text-sky-300">{String(inService.length).padStart(2, '0')}</span>
-            </div>
-            <div className="space-y-4">
-              {inService.length === 0 && (
-                <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] py-16 px-6 text-center">
-                  <Hand className="h-7 w-7 mx-auto text-zinc-600 mb-2 opacity-60" />
-                  <p className="text-sm text-zinc-500">No plates in hand</p>
-                </div>
-              )}
-              {inService.map(n => (
-                <NotificationCard key={n.id} notif={n} now={now} onPickUp={pickUp} onServe={serve} onReturn={returnToPass} />
-              ))}
-            </div>
+            )}
+            {ready.map(n => (
+              <NotificationCard key={n.id} notif={n} now={now} onServe={serve} />
+            ))}
           </div>
         </div>
 
         <p className="text-center text-xs text-zinc-600 mt-8">
-          Auto-refreshes every 3s · New plates highlighted for 10s · &gt;5min amber, &gt;8min red
+          Auto-refreshes every 3s · New orders highlighted for 10s · &gt;5min amber, &gt;8min red
         </p>
       </div>
     </div>
