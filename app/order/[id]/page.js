@@ -32,8 +32,7 @@ const STAGES_DINEIN = [
   { key: 'received', icon: Clock },
   { key: 'confirmed', icon: ChefHat },
   { key: 'in_kitchen', icon: Soup },
-  { key: 'plated', icon: PackageCheck },
-  { key: 'served', icon: Utensils },
+  { key: 'ready', icon: Utensils },
 ]
 
 const PROVIDER_BADGE = {
@@ -60,8 +59,8 @@ function progressIndex(order, kind) {
     return 0
   }
   if (kind === 'dinein') {
-    if (order.serve_status === 'served' || order.status === 'delivered') return 4
-    if (order.status === 'ready') return 3
+    // Simplified 4-stage flow: received → confirmed → in_kitchen → ready
+    if (order.serve_status === 'served' || order.status === 'delivered' || order.status === 'ready') return 3
     if (order.status === 'preparing') {
       const acc = order.accepted_at ? new Date(order.accepted_at).getTime() : 0
       if (acc && Date.now() - acc > COOKING_BUMP_MS) return 2
@@ -128,8 +127,7 @@ function OrderTrack() {
 
   // Pick a per-stage hint based on the current key. Delivery's "ready" stage
   // has two variants depending on whether the courier has been called. For
-  // dine-in, the "plated/Food ready" stage swaps to an "on the way" message
-  // once the waiter has taken the plate off the pass.
+  // dine-in, the "ready/Food ready" stage shows "on the way" message
   const hintFor = (s) => {
     if (kind === 'delivery' && s.key === 'ready') {
       return courierAlreadyRequested
@@ -141,8 +139,8 @@ function OrderTrack() {
       const tpl = t('track_stage.delivery.courier_requested_hint')
       return tpl.replace(/^Courier|^Kurjeris/, provider)
     }
-    if (kind === 'dinein' && s.key === 'plated' && order.waiter_picked_up_at && order.serve_status !== 'served') {
-      return t('track_stage.dinein.plated_hint_on_way')
+    if (kind === 'dinein' && s.key === 'ready') {
+      return 'Your food is ready — a waiter will bring it to your table'
     }
     return t(`track_stage.${kind}.${s.key}_hint`)
   }
@@ -187,7 +185,10 @@ function OrderTrack() {
                 const Icon = s.icon
                 const reached = i <= currentIdx
                 const isCurrent = i === currentIdx
-                const label = t(`track_stage.${kind}.${s.key}`)
+                // Use custom label for "ready" stage in dine-in, otherwise use translation
+                const label = (kind === 'dinein' && s.key === 'ready') 
+                  ? 'Food ready — on the way to your table'
+                  : t(`track_stage.${kind}.${s.key}`)
                 return (
                   <li key={s.key} className="ml-6">
                     <div className={`absolute -left-3 w-6 h-6 rounded-full flex items-center justify-center ${reached ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'} ${isCurrent ? 'ring-4 ring-primary/30 animate-pulse' : ''}`}>
