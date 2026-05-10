@@ -1,12 +1,13 @@
 'use client'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { 
   Calendar, Users, Clock, MapPin, DoorClosed, Home, Volume2, LogIn, Sparkles,
   Heart, Briefcase, Gift, UtensilsCrossed, Wine, PartyPopper, Check, X, 
-  UserCheck, Table as TableIcon, AlertCircle, ChevronRight, TrendingUp, CalendarClock
+  UserCheck, Table as TableIcon, AlertCircle, ChevronRight, TrendingUp, CalendarClock,
+  Timer, AlarmClock, Bell,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -72,10 +73,108 @@ function isSameDay(dateStr) {
   return dateStr === today
 }
 
+// ---------- Assignment countdown helpers ----------------------------------
+// Statuses where the timer is active and the manager still owes a table
+// assignment decision. Once the table is assigned (or the reservation is
+// closed/cancelled/no-show) the timer becomes 'na'.
+const TIMER_ACTIVE_STATUSES = new Set(['pending', 'confirmed'])
+// Statuses where the reservation is already past the assignment phase and
+// should sink to the bottom of the Today board.
+const TIMER_DONE_STATUSES = new Set([
+  'table_assigned', 'arrived', 'checked_in', 'completed', 'cancelled', 'no_show',
+])
+const ASSIGN_LEAD_MIN = 30  // assignment target = reservation_time − 30 min
+
+// Returns the assignment-timer info for a reservation evaluated at `now`.
+// state ∈ {'idle','soon','due','overdue','na'}:
+//   na      — reservation outside actionable window (not today, status done…)
+//   idle    — > 60 minutes until target (neutral chip)
+//   soon    — 30–60 min until target (soft amber)
+//   due     — inside the T-30 window (gold/orange)
+//   overdue — past the target with no table yet (red)
+function computeAssignmentTimer(reservation, now = Date.now()) {
+  if (!reservation || !reservation.date || !reservation.time) {
+    return { state: 'na' }
+  }
+  if (!TIMER_ACTIVE_STATUSES.has(reservation.status)) {
+    return { state: 'na' }
+  }
+  const target = new Date(`${reservation.date}T${reservation.time}:00`).getTime()
+  if (Number.isNaN(target)) return { state: 'na' }
+  const assignAt = target - ASSIGN_LEAD_MIN * 60_000
+  const minutesToTarget = Math.round((assignAt - now) / 60_000)
+
+  let state
+  if (minutesToTarget < 0) state = 'overdue'
+  else if (minutesToTarget <= ASSIGN_LEAD_MIN) state = 'due'
+  else if (minutesToTarget <= 60) state = 'soon'
+  else state = 'idle'
+
+  return {
+    state,
+    minutesToTarget,
+    targetTimestamp: assignAt,
+    reservationTimestamp: target,
+  }
+}
+
+// Pretty-print "1h 20m" / "45m" / "12 min" — driven by minutes count.
+function formatDurationMinutes(mins, { suffix = '' } = {}) {
+  const abs = Math.abs(mins)
+  if (abs < 60) return `${abs}m${suffix}`
+  const h = Math.floor(abs / 60)
+  const m = abs % 60
+  if (m === 0) return `${h}h${suffix}`
+  return `${h}h ${m}m${suffix}`
+}
+
+// Tailwind tones for each timer state. Kept in one place so the chip,
+// banner, and card-edge accents stay in sync.
+const TIMER_TONE = {
+  idle:    { ring: 'ring-zinc-700/40',  bg: 'bg-zinc-800/40',           text: 'text-zinc-300',     accent: '' },
+  soon:    { ring: 'ring-amber-500/30', bg: 'bg-amber-500/10',          text: 'text-amber-200',    accent: 'border-l-2 border-amber-500/40' },
+  due:     { ring: 'ring-orange-500/40',bg: 'bg-gradient-to-r from-orange-500/15 to-amber-500/10', text: 'text-orange-200', accent: 'border-l-2 border-orange-400' },
+  overdue: { ring: 'ring-red-500/50',   bg: 'bg-red-500/15',            text: 'text-red-200',      accent: 'border-l-2 border-red-500' },
+}
+
 function ReservationDashboard({ reservations = [], token, onUpdate }) {
   const [filter, setFilter] = useState('today')
   const [assigningTable, setAssigningTable] = useState(null)
   const [availableTables, setAvailableTables] = useState([])
+
+  // ---- Live assignment-countdown ticker --------------------------------
+  // Re-renders every 30 s so the "Assign in 1h 20m" chips stay accurate
+  // without re-fetching from the server. 30 s is plenty for minute-grained
+  // labels and keeps the component cheap.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Track which reservations have already been toasted so the same
+  // "table assignment due" alert doesn't fire on every tick.
+  const toastedDueRef = useRef(new Set())
+  useEffect(() => {
+    for (const r of reservations) {
+      if (!TIMER_ACTIVE_STATUSES.has(r.status)) continue
+      const t = computeAssignmentTimer(r, now)
+      if (t.state === 'due' || t.state === 'overdue') {
+        if (!toastedDueRef.current.has(r.id)) {
+          toastedDueRef.current.add(r.id)
+          toast(`Table assignment needed for ${r.name}`, {
+            description: `${formatTime12h(r.time)} · ${r.guests} ${r.guests === 1 ? 'guest' : 'guests'}`,
+            icon: <AlarmClock className="h-4 w-4 text-orange-300" />,
+          })
+        }
+      } else if (t.state === 'idle' || t.state === 'soon') {
+        // Leaving the due/overdue window (rare — typically only happens after
+        // the table is assigned and status changes); allow the alert to fire
+        // again if the reservation re-enters the window later.
+        toastedDueRef.current.delete(r.id)
+      }
+    }
+  }, [reservations, now])
 
   const adminFetch = async (url, options = {}) => {
     const res = await fetch(url, { 
@@ -119,14 +218,14 @@ function ReservationDashboard({ reservations = [], token, onUpdate }) {
   // Filter logic
   const filtered = useMemo(() => {
     const today = new Date().toISOString().split('T')[0]
-    const now = new Date()
+    const cutoffNow = new Date()
     
     let result = reservations
 
     if (filter === 'today') {
       result = result.filter(r => r.date === today)
     } else if (filter === 'upcoming') {
-      result = result.filter(r => new Date(r.date) >= now)
+      result = result.filter(r => new Date(r.date) >= cutoffNow)
     } else if (filter === 'confirmed') {
       result = result.filter(r => r.status === 'confirmed')
     } else if (filter === 'pending') {
@@ -137,12 +236,34 @@ function ReservationDashboard({ reservations = [], token, onUpdate }) {
       result = result.filter(r => r.status === 'cancelled' || r.status === 'no_show')
     }
 
-    return result.sort((a, b) => {
+    // ---- Sort -----------------------------------------------------------
+    // Today view ranks by assignment urgency so overdue / due reservations
+    // float to the top. Other filters keep the simple chronological order.
+    if (filter === 'today') {
+      const STATE_RANK = { overdue: 0, due: 1, soon: 2, idle: 3, na: 4 }
+      const isDoneStatus = (s) => TIMER_DONE_STATUSES.has(s)
+      return [...result].sort((a, b) => {
+        const aDone = isDoneStatus(a.status)
+        const bDone = isDoneStatus(b.status)
+        if (aDone !== bDone) return aDone ? 1 : -1 // already-handled rows sink
+        const ta = computeAssignmentTimer(a, now)
+        const tb = computeAssignmentTimer(b, now)
+        const ra = STATE_RANK[ta.state] ?? 4
+        const rb = STATE_RANK[tb.state] ?? 4
+        if (ra !== rb) return ra - rb
+        // Within the same urgency tier, earlier reservation time wins.
+        const dateA = new Date(`${a.date}T${a.time}`).getTime()
+        const dateB = new Date(`${b.date}T${b.time}`).getTime()
+        return dateA - dateB
+      })
+    }
+
+    return [...result].sort((a, b) => {
       const dateA = new Date(`${a.date}T${a.time}`)
       const dateB = new Date(`${b.date}T${b.time}`)
       return dateA - dateB
     })
-  }, [reservations, filter])
+  }, [reservations, filter, now])
 
   // Group by time for timeline view
   const timeline = useMemo(() => {

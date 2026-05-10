@@ -3330,3 +3330,218 @@ agent_communication:
       2. Test 23 failed: Table t2 already reserved (conflict from previous test runs)
       
       Both tasks (Public reservation tracking & guest recovery, Account linking) are now marked as working=true and needs_retesting=false.
+
+#====================================================================================================
+# Testing Data - Main Agent and testing sub agent both should log testing data below this section
+#====================================================================================================
+
+user_problem_statement: |
+  Improve table assignment modal. Tables marked as "Reserved" do not show reservation timing. Add reservation timing visibility. For any table with status = reserved, show: reservation time and optionally guest name (e.g., "Reserved · 8:00 PM"). If the reservation starts in the future, calculate relative time (e.g., "Reserved in 1h 20m"). If the table is occupied and also has a future reservation, show: "Occupied now" and "Next reserved: 8:00 PM". The goal is to help the manager quickly decide whether a table can be used temporarily for walk-ins before the reservation time.
+
+backend:
+  - task: "Enrich /api/reservations/:id/available-tables to filter out occupied/overlapping/cleaning tables and show only assignable tables"
+    implemented: true
+    working: "NA"
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            The endpoint must ONLY return truly assignable tables:
+            - Exclude occupied tables
+            - Exclude overlapping reserved tables (using 90-min reservation duration)
+            - Exclude cleaning/unavailable/out_of_service tables
+            The endpoint already includes upcoming_reservation and active_session data from previous work.
+            Need to verify the filtering logic is correct.
+
+frontend:
+  - task: "Display reservation timing in Assign Table modal with countdown and urgency colors"
+    implemented: true
+    working: "NA"
+    file: "components/ReservationDashboard.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Updated modal to display:
+            - "Reserved in X" relative time formatting
+            - "Occupied now" + "Next reserved: 8:00 PM" for dual-status tables
+            - Absolute times (e.g., "Reserved · 8:00 PM")
+            - assignment_due = reservation_time - 30min
+            - Urgency colors for countdown
+            - Overdue state
+            - Sorting by nearest assignment deadline
+            Need to verify UI rendering and all display logic.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Enrich /api/reservations/:id/available-tables to filter out occupied/overlapping/cleaning tables and show only assignable tables"
+    - "Display reservation timing in Assign Table modal with countdown and urgency colors"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Code has been written for reservation timing visibility in the Assign Table modal.
+        Backend: /api/reservations/:id/available-tables returns upcoming_reservation and active_session data.
+        Frontend: ReservationDashboard.js updated to display relative times, dual-status, and urgency colors.
+        
+        **CRITICAL TESTING REQUIREMENTS:**
+        1. Verify Assign Table modal ONLY shows truly assignable tables:
+           - NO occupied tables
+           - NO overlapping reserved tables (90-min duration)
+           - NO cleaning/unavailable tables
+        2. Verify overlap logic with 90-minute reservation duration
+        3. Verify countdown behavior:
+           - assignment_due = reservation_time - 30min
+           - urgency colors work
+           - overdue state works
+           - sorting by nearest assignment deadline works
+        4. Verify reservation cards show:
+           - reservation time
+           - relative time
+           - "Reserved in X"
+           - "Occupied now + Next reserved"
+        5. Keep UI clean without information overload
+        
+        Please test backend first using deep_testing_backend_nextjs agent with focus on:
+        - GET /api/reservations/:id/available-tables filtering logic
+        - upcoming_reservation and active_session enrichment
+        - Verify 90-minute overlap detection
+        - Verify only assignable tables are returned
+
+  - task: "GET /api/reservations/:id/available-tables - 90-minute overlap filtering"
+    implemented: false
+    working: false
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: false
+          agent: "testing"
+          comment: |
+            ❌ CRITICAL BUG FOUND - 90-minute overlap detection NOT implemented in available-tables endpoint
+            
+            **TEST RESULTS: 2/8 passed (25% success rate)**
+            
+            **WORKING FEATURES (2/8):**
+            ✅ Response enrichment (upcoming_reservation, active_session fields present and structured correctly)
+            ✅ Self-exclusion (reservation doesn't see itself in upcoming_reservation)
+            ✅ Back-to-back bookings work (15:30 reservation sees 14:00 table as available)
+            
+            **CRITICAL BUG (1/8):**
+            ❌ 90-minute overlap detection NOT working
+               - Created reservation A at 14:00, assigned to table T1
+               - Created reservation B at 14:30 (30 min after A - within 90-min window)
+               - Expected: T1 should be EXCLUDED from available tables for B
+               - Actual: T1 was AVAILABLE for B (BUG!)
+               - Root cause: Lines 1416-1422 only check for exact time matches, not 90-minute overlaps
+            
+            **ROOT CAUSE ANALYSIS:**
+            The endpoint at lines 1403-1476 uses this logic to find conflicting reservations:
+            ```javascript
+            const conflictingReservations = await db.collection('reservations').find({
+              id: { $ne: reservation.id },
+              date: reservation.date,
+              time: reservation.time,  // <-- ONLY EXACT TIME MATCH
+              status: { $in: ['pending', 'confirmed', 'table_assigned', 'arrived'] },
+              table_id: { $ne: null }
+            }).toArray()
+            ```
+            
+            This only blocks tables with reservations at the EXACT same time. It does NOT implement
+            the 90-minute overlap logic that exists in `suitableTablesForSlot` function (lines 94-133).
+            
+            **EXPECTED BEHAVIOR (from suitableTablesForSlot):**
+            - Reservation at 14:00 blocks table from 12:30 to 15:30 (90-minute window)
+            - Overlap logic: `rEnd > slotMin && rStart < slotEnd` (half-open interval)
+            - Back-to-back OK: 14:00 reservation does NOT block 15:30 (rEnd=15:30 not > slotMin=15:30)
+            
+            **IMPACT:**
+            - Manager can assign tables that are actually conflicting with existing reservations
+            - Double-booking possible if reservations are within 90 minutes of each other
+            - Only exact time conflicts are prevented
+            - This breaks the core requirement: "Verify ONLY truly assignable tables are returned"
+            
+            **REQUIRED FIX:**
+            Replace lines 1416-1425 with logic that:
+            1. Fetches ALL reservations on the same date with assigned tables
+            2. Filters for overlapping reservations using 90-minute window logic:
+               ```javascript
+               const resStart = timeStrToMinutes(reservation.time)
+               const resEnd = resStart + RESERVATION_DURATION_MIN  // 90
+               
+               const overlapping = sameDayReservations.filter(r => {
+                 if (!ACTIVE_RES_STATUSES.includes(r.status)) return false
+                 if (!r.table_id) return false
+                 const rStart = timeStrToMinutes(r.time)
+                 const rEnd = rStart + RESERVATION_DURATION_MIN
+                 return rEnd > resStart && rStart < resEnd  // half-open interval overlap
+               })
+               
+               const blockedTableIds = new Set(overlapping.map(r => r.table_id))
+               ```
+            3. Exclude blocked tables from available list
+            
+            Alternatively, refactor to use the existing `suitableTablesForSlot` function which already
+            implements this logic correctly.
+            
+            **TEST FILE:** /app/backend_test_table_assignment_modal.py
+            
+            **OTHER ISSUES (non-critical):**
+            - Some tests failed due to slot capacity (409 errors) - need better test data cleanup
+            - Walk-in session test needs correct endpoint (/tables/:id/walkin)
+            
+            This is a HIGH PRIORITY bug that must be fixed before the table assignment modal can be used safely.
+
+agent_communication:
+    - agent: "testing"
+      message: |
+        ❌ CRITICAL BUG FOUND in GET /api/reservations/:id/available-tables endpoint
+        
+        **ISSUE:** 90-minute overlap detection is NOT implemented. The endpoint only blocks tables
+        with reservations at the EXACT same time, not within the 90-minute service window.
+        
+        **TEST EVIDENCE:**
+        - Reservation A at 14:00 assigned to table T1
+        - Reservation B at 14:30 queried for available tables
+        - Expected: T1 excluded (within 90-min window: 12:30-15:30)
+        - Actual: T1 was available (BUG!)
+        
+        **ROOT CAUSE:** Lines 1416-1422 in route.js only filter by exact time match:
+        ```javascript
+        time: reservation.time,  // <-- ONLY EXACT TIME, NO OVERLAP LOGIC
+        ```
+        
+        **SOLUTION:** Implement 90-minute overlap logic similar to `suitableTablesForSlot` function
+        (lines 94-133) which already has the correct logic:
+        - Calculate resStart and resEnd (resStart + 90 min)
+        - Filter overlapping reservations: `rEnd > resStart && rStart < resEnd`
+        - Block tables assigned to overlapping reservations
+        
+        **IMPACT:** Manager can double-book tables if reservations are within 90 minutes of each other.
+        This is a critical bug that breaks the core requirement.
+        
+        **WORKING FEATURES:**
+        ✅ Response enrichment (upcoming_reservation, active_session) working correctly
+        ✅ Self-exclusion working (reservation doesn't see itself)
+        ✅ Active status filtering working (cancelled reservations excluded)
+        ✅ Back-to-back bookings work (15:30 after 14:00 is OK)
+        
+        Please fix the overlap detection logic before proceeding with frontend testing.
+
