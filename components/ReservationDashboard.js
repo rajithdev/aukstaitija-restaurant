@@ -364,92 +364,165 @@ function ReservationDashboard({ reservations = [], token, onUpdate }) {
               const status = STATUS_STYLES[r.status] || STATUS_STYLES.pending
               const SeatingIcon = SEATING_ICONS[r.seating_preference] || Sparkles
               const OccasionIcon = OCCASION_ICONS[r.occasion] || UtensilsCrossed
+              const timer = computeAssignmentTimer(r, now)
+              const tone = TIMER_TONE[timer.state] || TIMER_TONE.idle
+              
+              // Format reservation date prominently
+              const resDate = r.date ? new Date(r.date + 'T00:00:00') : null
+              const dayName = resDate ? resDate.toLocaleDateString('en-US', { weekday: 'short' }) : ''
+              const dateFormatted = resDate ? resDate.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }) : r.date
+              
+              // Calculate time until reservation
+              const reservationTime = r.date && r.time ? new Date(`${r.date}T${r.time}:00`) : null
+              const resTimeMs = reservationTime ? reservationTime.getTime() - now : null
+              const resTimeMins = resTimeMs ? Math.round(resTimeMs / 60000) : null
+              
+              let timeUntilBadge = null
+              let timeUntilBadgeColor = 'bg-zinc-800/40 text-zinc-400'
+              
+              if (resTimeMins !== null && resTimeMins > 0) {
+                if (resTimeMins < 30) {
+                  timeUntilBadge = 'Starting now'
+                  timeUntilBadgeColor = 'bg-red-500/20 text-red-300'
+                } else if (resTimeMins < 60) {
+                  timeUntilBadge = `In ${resTimeMins}m`
+                  timeUntilBadgeColor = 'bg-orange-500/20 text-orange-300'
+                } else {
+                  const h = Math.floor(resTimeMins / 60)
+                  const m = resTimeMins % 60
+                  timeUntilBadge = m === 0 ? `In ${h}h` : `In ${h}h ${m}m`
+                  timeUntilBadgeColor = 'bg-emerald-500/20 text-emerald-300'
+                }
+              } else if (resTimeMins !== null && resTimeMins <= 0) {
+                timeUntilBadge = 'Overdue'
+                timeUntilBadgeColor = 'bg-red-500/20 text-red-300'
+              }
 
               return (
-                <Card key={r.id} className={`p-6 bg-zinc-900/50 border-zinc-800 hover:border-zinc-700 transition-all group`}>
+                <Card key={r.id} className={`p-6 bg-zinc-900/50 border-zinc-800 hover:border-zinc-700 transition-all group ${tone.accent}`}>
                   <div className="flex flex-col lg:flex-row gap-6">
-                    {/* Left: Customer Info */}
-                    <div className="flex-1 space-y-3">
+                    {/* Left: Reservation Details */}
+                    <div className="flex-1 space-y-4">
+                      {/* Top: Date/Time Header - PROMINENT */}
                       <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <div className="flex items-center gap-3 mb-2">
-                            <h3 className="text-xl font-semibold text-zinc-100">{r.name}</h3>
-                            <span className={`text-[10px] uppercase tracking-wider px-2 py-1 rounded-full border ${status.bg} ${status.text} ${status.border}`}>
-                              {status.label}
-                            </span>
-                          </div>
-                          <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">#{r.confirmation}</p>
-                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-400">
-                            <span className="flex items-center gap-1.5">
-                              <Users className="h-3.5 w-3.5 text-amber-400" />
-                              {r.guests} {r.guests === 1 ? 'guest' : 'guests'}
-                            </span>
-                            {r.phone && (
-                              <span className="flex items-center gap-1.5">
-                                <span className="text-amber-400">•</span>
-                                {r.phone}
-                              </span>
-                            )}
-                            {r.email && (
-                              <span className="flex items-center gap-1.5">
-                                <span className="text-amber-400">•</span>
-                                {r.email}
-                              </span>
-                            )}
+                        <div className="flex items-center gap-4">
+                          <div>
+                            <div className="flex items-center gap-3 mb-1">
+                              <Calendar className="h-5 w-5 text-amber-400" />
+                              <div>
+                                <div className="text-lg font-semibold text-zinc-100">{dayName}, {dateFormatted}</div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <Clock className="h-5 w-5 text-amber-400" />
+                              <div className="text-2xl font-bold text-amber-300">{formatTime12h(r.time)}</div>
+                              {timeUntilBadge && (
+                                <span className={`px-2.5 py-1 rounded-md text-xs font-semibold uppercase tracking-wide ${timeUntilBadgeColor}`}>
+                                  {timeUntilBadge}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                         
                         {r.table_id && (
-                          <div className="px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+                          <div className="px-4 py-2 bg-amber-500/10 border border-amber-500/30 rounded-lg">
                             <div className="flex items-center gap-2">
-                              <TableIcon className="h-4 w-4 text-amber-400" />
-                              <span className="font-mono text-sm text-amber-300">Table {r.table_id.replace('t', '')}</span>
+                              <TableIcon className="h-5 w-5 text-amber-400" />
+                              <span className="font-mono text-lg font-semibold text-amber-300">Table {r.table_id.replace('t', '')}</span>
                             </div>
                           </div>
                         )}
                       </div>
 
-                      <div className="flex flex-wrap gap-4">
-                        <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800/50 rounded-lg">
-                          <SeatingIcon className="h-4 w-4 text-amber-400" />
-                          <span className="text-sm text-zinc-300">{r.seating_preference}</span>
+                      {/* Customer Name & Status */}
+                      <div>
+                        <div className="flex items-center gap-3 mb-2">
+                          <h3 className="text-2xl font-semibold text-zinc-100">{r.name}</h3>
+                          <span className={`text-xs uppercase tracking-wider px-2.5 py-1 rounded-full border ${status.bg} ${status.text} ${status.border}`}>
+                            {status.label}
+                          </span>
                         </div>
-                        <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800/50 rounded-lg">
-                          <OccasionIcon className="h-4 w-4 text-amber-400" />
-                          <span className="text-sm text-zinc-300">{r.occasion}</span>
+                        <p className="text-xs text-zinc-500 uppercase tracking-wider">#{r.confirmation}</p>
+                      </div>
+
+                      {/* Guest Count & Contact */}
+                      <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-zinc-300">
+                        <span className="flex items-center gap-2">
+                          <Users className="h-4 w-4 text-amber-400" />
+                          <span className="font-medium">{r.guests} {r.guests === 1 ? 'guest' : 'guests'}</span>
+                        </span>
+                        {r.phone && (
+                          <span className="flex items-center gap-2">
+                            <span className="text-amber-400">•</span>
+                            <span>{r.phone}</span>
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Assignment Reminder - Show for pending/confirmed only */}
+                      {timer.state !== 'na' && timer.minutesToTarget !== undefined && (
+                        <div className={`p-4 rounded-lg border ${tone.bg} ${tone.ring} border`}>
+                          <div className="flex items-center gap-3">
+                            <Bell className={`h-5 w-5 ${tone.text}`} />
+                            <div>
+                              <div className="text-sm font-semibold text-zinc-100">
+                                {timer.state === 'overdue' ? 'Table assignment overdue!' : (() => {
+                                  // Calculate assignment time (reservation time - 30 min)
+                                  const [hStr, mStr] = r.time.split(':')
+                                  let h = parseInt(hStr, 10)
+                                  let m = parseInt(mStr, 10)
+                                  m -= 30
+                                  if (m < 0) {
+                                    m += 60
+                                    h -= 1
+                                    if (h < 0) h += 24
+                                  }
+                                  const assignTime = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`
+                                  return `Assign table by ${formatTime12h(assignTime)}`
+                                })()}
+                              </div>
+                              <div className={`text-xs ${tone.text}`}>
+                                {timer.state === 'overdue' 
+                                  ? `${Math.abs(timer.minutesToTarget)} minutes late` 
+                                  : `${formatDurationMinutes(timer.minutesToTarget)} before reservation`}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Preferences - Compact */}
+                      <div className="flex flex-wrap gap-3">
+                        <div className="flex items-center gap-2 px-2.5 py-1 bg-zinc-800/50 rounded text-xs">
+                          <SeatingIcon className="h-3.5 w-3.5 text-amber-400" />
+                          <span className="text-zinc-400">{r.seating_preference}</span>
+                        </div>
+                        <div className="flex items-center gap-2 px-2.5 py-1 bg-zinc-800/50 rounded text-xs">
+                          <OccasionIcon className="h-3.5 w-3.5 text-amber-400" />
+                          <span className="text-zinc-400">{r.occasion}</span>
                         </div>
                       </div>
 
+                      {/* Notes - If present */}
                       {(r.special_requests || r.notes) && (
-                        <div className="pt-2 border-t border-zinc-800">
+                        <div className="pt-3 border-t border-zinc-800">
                           <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">Notes</p>
                           <p className="text-sm text-zinc-400 italic">"{r.special_requests || r.notes}"</p>
                         </div>
                       )}
                     </div>
 
-                    {/* Right: Actions */}
-                    <div className="flex flex-col gap-2 lg:min-w-[200px]">
+                    {/* Right: Action Buttons */}
+                    <div className="flex flex-col gap-2 lg:min-w-[220px]">
                       {!r.table_id && r.status !== 'cancelled' && r.status !== 'no_show' && (
                         <Button 
-                          size="sm" 
+                          size="lg" 
                           onClick={() => openAssignTable(r)}
-                          className="bg-amber-600 hover:bg-amber-500 text-white"
+                          className="bg-amber-600 hover:bg-amber-500 text-white font-semibold"
                         >
                           <TableIcon className="h-4 w-4 mr-2" />
                           Assign Table
-                        </Button>
-                      )}
-
-                      {r.status === 'pending' && (
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={() => updateReservation(r.id, { status: 'confirmed' })}
-                          className="border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
-                        >
-                          <Check className="h-4 w-4 mr-2" />
-                          Confirm
                         </Button>
                       )}
 

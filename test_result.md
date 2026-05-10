@@ -3404,11 +3404,11 @@ backend:
 frontend:
   - task: "Display reservation timing in Assign Table modal with countdown and urgency colors"
     implemented: true
-    working: "NA"
+    working: true
     file: "components/ReservationDashboard.js"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         - working: "NA"
           agent: "main"
@@ -3422,6 +3422,50 @@ frontend:
             - Overdue state
             - Sorting by nearest assignment deadline
             Need to verify UI rendering and all display logic.
+        - working: true
+          agent: "main"
+          comment: |
+            ✅ REDESIGNED reservation cards for better visual hierarchy:
+            
+            **IMPROVED LAYOUT:**
+            1. Date/time header - PROMINENT at top-left
+               - Large font: "Mon, May 11, 2026"
+               - Bold time: "1:00 PM" / "6:00 PM"
+               - Time-until badge: "IN 17H 19M" (green)
+            
+            2. Assignment reminder section
+               - Shows "Assign table by 12:30 PM"
+               - Countdown: "6h 4m before reservation"
+               - Urgency colors applied (green/amber/orange/red)
+            
+            3. Customer name - Large (text-2xl)
+            4. Guest count and phone - Visible but not dominant
+            5. Preferences - Compact badges
+            6. Action buttons - Right-aligned
+            
+            **URGENCY COLORS:**
+            - >60m = neutral/green
+            - 30-60m = amber
+            - <30m = orange
+            - overdue = red
+            - Orange left border accent for due/overdue states
+            
+            **SORTING:**
+            - Today tab sorts by assignment deadline (overdue first)
+            - Other tabs sort by reservation time
+            
+            **VERIFIED:**
+            ✅ Date/time clearly visible in large font
+            ✅ Time until reservation badge showing
+            ✅ Assignment reminder with countdown
+            ✅ Urgency colors working
+            ✅ Visual hierarchy improved
+            ✅ Clean, scannable layout
+            
+            Assign Table modal shows reservation timing:
+            - "Reserved in 1h 41m · 9:30 PM"
+            - "Reserved at 8:00 PM"
+            - Backend filtering working (only assignable tables returned by API)
 
 metadata:
   created_by: "main_agent"
