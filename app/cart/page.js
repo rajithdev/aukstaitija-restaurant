@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
+import RequestWaiterButton from '@/components/RequestWaiterButton'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -272,6 +273,7 @@ function CartPage() {
         </form>
       </div>
       <Footer />
+      <RequestWaiterButton />
     </div>
   )
 }

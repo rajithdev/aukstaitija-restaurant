@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
+import RequestWaiterButton from '@/components/RequestWaiterButton'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/lib/AppContext'
@@ -302,6 +303,7 @@ function OrderTrack() {
         </div>
       </div>
       <Footer />
+      <RequestWaiterButton />
     </div>
   )
 }

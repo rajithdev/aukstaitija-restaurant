@@ -1082,6 +1082,57 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json(stripId(updated)))
     }
 
+    // ---------------- Guest Requests ----------------
+    // POST /guest-requests — Customer can request assistance
+    if (route === '/guest-requests' && method === 'POST') {
+      const body = await request.json()
+      if (!body.table_id || !body.request_type) {
+        return handleCORS(NextResponse.json({ error: 'table_id and request_type required' }, { status: 400 }))
+      }
+      const id = uuidv4()
+      const now = new Date()
+      const request_doc = {
+        id,
+        table_id: body.table_id,
+        request_type: body.request_type,
+        note: body.note || '',
+        status: 'pending',
+        created_at: now,
+        resolved_at: null,
+      }
+      await db.collection('guest_requests').insertOne(request_doc)
+      return handleCORS(NextResponse.json(stripId(request_doc)), { status: 201 })
+    }
+
+    // GET /guest-requests (admin) — Get all pending guest requests
+    if (route === '/guest-requests' && method === 'GET') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const requests = await db.collection('guest_requests')
+        .find({ status: 'pending' })
+        .sort({ created_at: -1 })
+        .toArray()
+      
+      // Enrich with table info
+      const enriched = await Promise.all(requests.map(async r => {
+        const table = await db.collection('tables').findOne({ id: r.table_id })
+        return { ...stripId(r), table_number: table?.number }
+      }))
+      
+      return handleCORS(NextResponse.json(enriched))
+    }
+
+    // PATCH /guest-requests/:id (admin) — Mark as resolved
+    if (path[0] === 'guest-requests' && path.length === 2 && method === 'PATCH') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const now = new Date()
+      await db.collection('guest_requests').updateOne(
+        { id: path[1] },
+        { $set: { status: 'resolved', resolved_at: now } }
+      )
+      const updated = await db.collection('guest_requests').findOne({ id: path[1] })
+      return handleCORS(NextResponse.json(stripId(updated)))
+    }
+
     // ---------------- Reservations ----------------
     // POST /reservations
     if (route === '/reservations' && method === 'POST') {
