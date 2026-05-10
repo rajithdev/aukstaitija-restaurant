@@ -7,7 +7,7 @@ import Footer from '@/components/Footer'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import ReservationTimeline, {
-  STATUS_HEADLINES, isTableRevealed,
+  STATUS_HEADLINES, STATUS_SUBTEXT, isTableRevealed,
 } from '@/components/ReservationTimeline'
 import {
   Calendar, Clock, Users, MapPin, RefreshCw, Search, Copy, Check,
@@ -211,6 +211,7 @@ function ReservationTrackerPage() {
   const tableShown = isTableRevealed(reservation.status)
   const tableLabel = reservation.table_number ? `T${reservation.table_number}` : null
   const headline = STATUS_HEADLINES[reservation.status] || 'Reservation status'
+  const subtext = STATUS_SUBTEXT[reservation.status] || null
   const interrupted = ['cancelled', 'no_show'].includes(reservation.status)
   const terminal = ['completed', 'cancelled', 'no_show'].includes(reservation.status)
 
@@ -255,13 +256,20 @@ function ReservationTrackerPage() {
         <Card className={`overflow-hidden mb-6 ${statusJustChanged ? 'ring-2 ring-primary animate-pulse' : ''}`}>
           <div className="p-6 md:p-8 bg-gradient-to-br from-primary/10 via-primary/5 to-transparent">
             <h2 className="font-serif text-2xl md:text-3xl">{headline}</h2>
+            
+            {/* Premium subtext for reassurance */}
+            {subtext && !interrupted && (
+              <p className="mt-3 text-sm text-muted-foreground leading-relaxed max-w-xl">
+                {subtext}
+              </p>
+            )}
 
             {/* Pending / Confirmed: show only the basic reservation info.
                 Table Assigned: status content is replaced by the premium
                 table card below — we hide the basic info row here so the
                 customer's eye lands on the table reveal. */}
             {!tableShown && !interrupted && (
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-4 text-sm text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-5 text-sm text-muted-foreground">
                 <span className="flex items-center gap-1.5">
                   <Calendar className="h-4 w-4 text-primary" />
                   {reservation.date}

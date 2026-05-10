@@ -10,16 +10,16 @@ import {
 // Operational stages (arrived / checked_in / completed) are deliberately
 // excluded — customers should only see: received → confirmed → table ready.
 export const TIMELINE_STEPS = [
-  { key: 'pending', label: 'Pending', icon: Hourglass, blurb: "We've got your request" },
-  { key: 'confirmed', label: 'Confirmed', icon: ShieldCheck, blurb: 'Reservation locked in' },
-  { key: 'table_assigned', label: 'Table Assigned', icon: TableIcon, blurb: 'Your table is ready' },
+  { key: 'pending', label: 'Reservation Received', icon: Hourglass, blurb: 'Your request is with our team' },
+  { key: 'confirmed', label: 'Confirmed', icon: ShieldCheck, blurb: 'Reserved for you' },
+  { key: 'table_assigned', label: 'Table Assigned', icon: TableIcon, blurb: 'Your table awaits' },
 ]
 
 export const REVEAL_AFTER_INDEX = TIMELINE_STEPS.findIndex(s => s.key === 'table_assigned')
 
 export const STATUS_HEADLINES = {
-  pending: "We've received your reservation request.",
-  confirmed: 'Your reservation is confirmed. Your table will be assigned shortly.',
+  pending: 'Your reservation is being prepared.',
+  confirmed: 'Your reservation is confirmed.',
   table_assigned: 'Your table is ready.',
   // Operational statuses still possible on the back end — collapse them into
   // the table-ready experience so the customer never sees stage churn after
@@ -29,6 +29,15 @@ export const STATUS_HEADLINES = {
   completed: 'Your table is ready.',
   cancelled: 'Reservation cancelled',
   no_show: 'Marked as no-show',
+}
+
+export const STATUS_SUBTEXT = {
+  pending: 'Table details will be shared closer to your arrival for the best dining experience.',
+  confirmed: 'We look forward to welcoming you. Your table assignment is being finalized.',
+  table_assigned: 'Everything is prepared for your arrival.',
+  arrived: 'Everything is prepared for your arrival.',
+  checked_in: 'Everything is prepared for your arrival.',
+  completed: 'Everything is prepared for your arrival.',
 }
 
 export function statusIndex(status) {
