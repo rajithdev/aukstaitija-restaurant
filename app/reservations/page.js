@@ -1,5 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
 import { Button } from '@/components/ui/button'
@@ -7,10 +9,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 import { useApp } from '@/lib/AppContext'
-import { 
-  Calendar, Users, Clock, Check, Phone, MapPin, Home, 
-  DoorClosed, Volume2, LogIn, Sparkles, Heart, Briefcase, 
-  Gift, UtensilsCrossed, Wine, PartyPopper 
+import {
+  Calendar, Users, Clock, Check, Phone, MapPin, Home,
+  DoorClosed, Volume2, LogIn, Sparkles, Heart, Briefcase,
+  Gift, UtensilsCrossed, Wine, PartyPopper, ArrowRight, Search, X
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -34,6 +36,7 @@ const OCCASIONS = [
 
 function ReservationsPage() {
   const { t } = useApp()
+  const router = useRouter()
   const today = new Date().toISOString().split('T')[0]
   const [date, setDate] = useState(today)
   const [time, setTime] = useState('')
@@ -44,6 +47,22 @@ function ReservationsPage() {
   const [slots, setSlots] = useState([])
   const [submitting, setSubmitting] = useState(false)
   const [confirmed, setConfirmed] = useState(null)
+  // Resume banner — pulled from localStorage on mount. Lets a returning
+  // guest jump straight back to their tracking page.
+  const [savedCode, setSavedCode] = useState(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const stored = localStorage.getItem('latest_reservation_code')
+      if (stored) setSavedCode(stored)
+    } catch {}
+  }, [])
+
+  const dismissResume = () => {
+    setSavedCode(null)
+    try { localStorage.removeItem('latest_reservation_code') } catch {}
+  }
 
   useEffect(() => {
     fetch(`/api/reservations/availability?date=${date}`).then(r => r.json()).then(d => {
@@ -74,10 +93,19 @@ function ReservationsPage() {
         })
       })
       const data = await res.json()
-      if (data.id) { 
-        setConfirmed(data) 
-      } else { 
-        toast.error(data.error) 
+      if (data.id) {
+        // Persist the code so a guest who refreshes or returns later still
+        // has their reservation reachable from the home/reservations page.
+        if (data.reservation_code) {
+          try { localStorage.setItem('latest_reservation_code', data.reservation_code) } catch {}
+        }
+        setConfirmed(data)
+        // Brief celebratory pause then redirect to the public live tracker.
+        setTimeout(() => {
+          if (data.reservation_code) router.push(`/reservation/${data.reservation_code}`)
+        }, 1800)
+      } else {
+        toast.error(data.error)
       }
     } finally { 
       setSubmitting(false) 
@@ -104,8 +132,8 @@ function ReservationsPage() {
               Your reservation is confirmed. Your table will be assigned shortly — we'll notify you the moment it's ready.
             </p>
             <div className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500/10 border border-amber-500/20 rounded-full">
-              <span className="text-amber-400 font-mono text-sm">Confirmation:</span>
-              <span className="text-amber-300 font-bold">{confirmed.confirmation}</span>
+              <span className="text-amber-400 font-mono text-sm">Code:</span>
+              <span className="text-amber-300 font-bold font-mono">{confirmed.reservation_code || confirmed.confirmation}</span>
             </div>
           </div>
 
@@ -188,16 +216,17 @@ function ReservationsPage() {
 
           <Button 
             className="mt-8 w-full h-12 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-white shadow-lg shadow-amber-500/20" 
-            onClick={() => { 
-              setConfirmed(null)
-              setForm({ name: '', phone: '', email: '', notes: '' })
-              setTime('')
-              setSeatingPref('No preference')
-              setOccasion('Casual dining')
+            onClick={() => {
+              if (confirmed.reservation_code) {
+                router.push(`/reservation/${confirmed.reservation_code}`)
+              }
             }}
           >
-            Make Another Reservation
+            View live tracker <ArrowRight className="h-4 w-4 ml-2" />
           </Button>
+          <p className="text-center text-xs text-zinc-500 mt-3">
+            Redirecting you automatically…
+          </p>
         </div>
         <Footer />
       </div>
@@ -208,6 +237,38 @@ function ReservationsPage() {
     <div className="min-h-screen bg-gradient-to-br from-zinc-950 via-zinc-900 to-amber-950/20">
       <Navbar />
       <div className="container mx-auto py-12 px-4">
+        {/* Resume banner — visible when a guest has a saved reservation code */}
+        {savedCode && !confirmed && (
+          <div className="max-w-3xl mx-auto mb-8">
+            <Card className="p-4 bg-amber-500/10 border-amber-500/30 backdrop-blur-sm">
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="p-2 rounded-full bg-amber-500/20 text-amber-300">
+                  <Sparkles className="h-4 w-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm text-amber-100">Resume your reservation</p>
+                  <p className="text-xs text-amber-200/70">
+                    We saved your last booking — code <span className="font-mono">{savedCode}</span>
+                  </p>
+                </div>
+                <Link href={`/reservation/${savedCode}`}>
+                  <Button size="sm" className="bg-amber-500 hover:bg-amber-400 text-black">
+                    Open tracker <ArrowRight className="h-3 w-3 ml-1.5" />
+                  </Button>
+                </Link>
+                <button
+                  onClick={dismissResume}
+                  className="text-amber-200/60 hover:text-amber-100 p-1"
+                  title="Dismiss"
+                  aria-label="Dismiss resume banner"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </Card>
+          </div>
+        )}
+
         <div className="text-center mb-12">
           <p className="text-amber-400 text-xs uppercase tracking-[0.4em] mb-3">Reserve Your Table</p>
           <h1 className="font-serif text-5xl md:text-7xl mb-4 bg-gradient-to-r from-amber-200 via-amber-400 to-amber-200 bg-clip-text text-transparent">
@@ -215,6 +276,9 @@ function ReservationsPage() {
           </h1>
           <p className="text-zinc-400 text-lg max-w-2xl mx-auto">
             Select your preferences and let us prepare a memorable evening for you
+          </p>
+          <p className="text-zinc-500 text-xs mt-3">
+            Lost your reservation? <Link href="/reservation-lookup" className="text-amber-400 hover:text-amber-300 inline-flex items-center gap-1"><Search className="h-3 w-3" /> Look up by phone or email</Link>
           </p>
         </div>
 

@@ -146,6 +146,76 @@ function summariseItems(items, max = 4) {
   return items.length > max ? `${head}, +${items.length - max} more` : head
 }
 
+// Public, URL-friendly reservation code (RSV-XXXXXX). Uses a 32-char
+// alphabet that drops confusable glyphs (I/O/0/1) so users can read codes
+// off a confirmation email without hitting OCR pain. Collisions are
+// extremely unlikely (~1B keyspace) but we still guard against them at
+// insertion time with a small retry loop.
+const RSV_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+function generateReservationCode() {
+  let code = ''
+  for (let i = 0; i < 6; i++) code += RSV_ALPHABET[Math.floor(Math.random() * RSV_ALPHABET.length)]
+  return `RSV-${code}`
+}
+async function generateUniqueReservationCode(db) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = generateReservationCode()
+    const exists = await db.collection('reservations').findOne({ reservation_code: code })
+    if (!exists) return code
+  }
+  // Fallback — embed timestamp segment for guaranteed uniqueness
+  return `RSV-${Date.now().toString(36).slice(-6).toUpperCase()}`
+}
+
+// Backfill reservation_code on legacy rows. Reservations created before this
+// feature existed only have `confirmation` (RES######). We mint a new RSV-
+// code on first read so the tracking URL always works, regardless of when the
+// reservation was made.
+async function ensureReservationCode(db, reservation) {
+  if (!reservation || reservation.reservation_code) return reservation
+  const code = await generateUniqueReservationCode(db)
+  await db.collection('reservations').updateOne(
+    { id: reservation.id },
+    { $set: { reservation_code: code } }
+  )
+  return { ...reservation, reservation_code: code }
+}
+
+// Customer-safe view of a reservation. Strips owner PII (full email/phone)
+// and the user_id, but keeps the data the tracking page needs to render the
+// timeline and the table-reveal block. Used by the public tracker endpoints.
+function publicReservationView(reservation, table) {
+  if (!reservation) return null
+  const tableRevealed = ['table_assigned', 'arrived', 'checked_in'].includes(reservation.status)
+  return {
+    id: reservation.id,
+    reservation_code: reservation.reservation_code,
+    confirmation: reservation.confirmation,
+    name: reservation.name,
+    date: reservation.date,
+    time: reservation.time,
+    guests: reservation.guests,
+    seating_preference: reservation.seating_preference,
+    occasion: reservation.occasion,
+    special_requests: reservation.special_requests,
+    notes: reservation.notes,
+    status: reservation.status,
+    table_id: tableRevealed ? reservation.table_id : null,
+    table_number: tableRevealed && table ? table.number : null,
+    table_section: tableRevealed && table ? table.section : null,
+    confirmed_at: reservation.confirmed_at || null,
+    table_assigned_at: reservation.table_assigned_at || null,
+    arrived_at: reservation.arrived_at || null,
+    checked_in_at: reservation.checked_in_at || null,
+    completed_at: reservation.completed_at || null,
+    cancelled_at: reservation.cancelled_at || null,
+    no_show_at: reservation.no_show_at || null,
+    created_at: reservation.created_at,
+    has_user: !!reservation.user_id,
+  }
+}
+
+
 // ---------------- Notification helpers ----------------
 // In-app notifications go into the `notifications` collection and are read by
 // the customer profile UI. Email/SMS are *queued* (collections only, no
@@ -735,6 +805,9 @@ async function handleRoute(request, { params }) {
       const reservation = {
         id: uuidv4(),
         confirmation: 'RES' + Date.now().toString().slice(-6),
+        // Public, URL-safe code used for the guest tracking page
+        // (/reservation/RSV-XXXXXX). Survives logout/cookie loss.
+        reservation_code: await generateUniqueReservationCode(db),
         user_id: (await currentUser())?.id || null,
         name: body.name,
         phone: body.phone || '',
@@ -754,6 +827,70 @@ async function handleRoute(request, { params }) {
       }
       await db.collection('reservations').insertOne(reservation)
       return handleCORS(NextResponse.json(stripId(reservation)))
+    }
+
+    // ---------------------------------------------------------------
+    //  Public reservation tracking & guest recovery
+    // ---------------------------------------------------------------
+    // GET /reservations/by-code/:code — used by /reservation/[code] for
+    // both guest users and logged-in users to live-poll status.
+    // Tolerant: matches reservation_code (case-insensitive), legacy
+    // `confirmation`, or even the raw 6-char suffix.
+    if (path[0] === 'reservations' && path[1] === 'by-code' && path.length === 3 && method === 'GET') {
+      const raw = decodeURIComponent(path[2] || '').trim().toUpperCase()
+      if (!raw) return handleCORS(NextResponse.json({ error: 'Code required' }, { status: 400 }))
+      const candidates = [raw]
+      if (!raw.startsWith('RSV-')) candidates.push(`RSV-${raw}`)
+      // Also try looking up by legacy confirmation (RES######)
+      const reservation = await db.collection('reservations').findOne({
+        $or: [
+          { reservation_code: { $in: candidates } },
+          { confirmation: raw },
+        ]
+      })
+      if (!reservation) return handleCORS(NextResponse.json({ error: 'Reservation not found' }, { status: 404 }))
+      const ensured = await ensureReservationCode(db, reservation)
+      const table = ensured.table_id
+        ? await db.collection('tables').findOne({ id: ensured.table_id })
+        : null
+      return handleCORS(NextResponse.json(publicReservationView(ensured, table)))
+    }
+
+    // POST /reservations/lookup — guest recovery. Body { phone? | email? }
+    // Returns up to 10 most recent matching reservations as the public view
+    // (no PII leak). Either phone OR email must be provided.
+    if (route === '/reservations/lookup' && method === 'POST') {
+      const body = await request.json().catch(() => ({}))
+      const email = (body.email || '').trim().toLowerCase()
+      const phone = (body.phone || '').trim()
+      if (!email && !phone) {
+        return handleCORS(NextResponse.json({ error: 'Provide email or phone' }, { status: 400 }))
+      }
+      const filter = { $or: [] }
+      if (email) filter.$or.push({ email: { $regex: `^${email}$`, $options: 'i' } })
+      if (phone) {
+        // Match on the last 7 digits to forgive country-code / formatting
+        // differences ("+1 555-111-2222" should match "5551112222").
+        const digits = phone.replace(/\D/g, '')
+        const tail = digits.slice(-7)
+        if (tail) filter.$or.push({ phone: { $regex: tail.split('').join('\\D*') } })
+      }
+      const list = await db.collection('reservations')
+        .find(filter)
+        .sort({ created_at: -1 })
+        .limit(10)
+        .toArray()
+      // Backfill codes for legacy reservations so the tracking link works
+      const ensured = []
+      for (const r of list) ensured.push(await ensureReservationCode(db, r))
+      const tableIds = [...new Set(ensured.map(r => r.table_id).filter(Boolean))]
+      const tables = tableIds.length
+        ? await db.collection('tables').find({ id: { $in: tableIds } }).toArray()
+        : []
+      const tableMap = new Map(tables.map(t => [t.id, t]))
+      return handleCORS(NextResponse.json({
+        reservations: ensured.map(r => publicReservationView(r, tableMap.get(r.table_id))),
+      }))
     }
 
     // GET /reservations/availability?date=YYYY-MM-DD
@@ -1362,7 +1499,64 @@ async function handleRoute(request, { params }) {
       const user = await currentUser()
       if (!user) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
       const list = await db.collection('reservations').find({ user_id: user.id }).sort({ date: -1, time: -1 }).limit(50).toArray()
-      return handleCORS(NextResponse.json(list.map(stripId)))
+      // Backfill reservation_code on legacy rows so client-side tracking links work
+      const ensured = []
+      for (const r of list) ensured.push(await ensureReservationCode(db, r))
+      return handleCORS(NextResponse.json(ensured.map(stripId)))
+    }
+
+    // GET /users/me/linkable-reservations — guest reservations whose
+    // email/phone matches the logged-in user but which haven't been claimed
+    // yet (user_id is null). Used by the profile to show the
+    // "We found your previous reservations" prompt.
+    if (route === '/users/me/linkable-reservations' && method === 'GET') {
+      const user = await currentUser()
+      if (!user) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const matchers = []
+      if (user.email) matchers.push({ email: { $regex: `^${user.email}$`, $options: 'i' } })
+      if (user.phone) {
+        const tail = user.phone.replace(/\D/g, '').slice(-7)
+        if (tail) matchers.push({ phone: { $regex: tail.split('').join('\\D*') } })
+      }
+      if (matchers.length === 0) return handleCORS(NextResponse.json({ reservations: [] }))
+      const list = await db.collection('reservations')
+        .find({ user_id: null, $or: matchers })
+        .sort({ created_at: -1 })
+        .limit(20)
+        .toArray()
+      const ensured = []
+      for (const r of list) ensured.push(await ensureReservationCode(db, r))
+      return handleCORS(NextResponse.json({
+        reservations: ensured.map(stripId),
+      }))
+    }
+
+    // POST /users/me/link-reservations — body { reservation_ids: [...] }.
+    // Claims unowned reservations matching the user's email/phone. Refuses
+    // to claim reservations already owned by someone else.
+    if (route === '/users/me/link-reservations' && method === 'POST') {
+      const user = await currentUser()
+      if (!user) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const body = await request.json().catch(() => ({}))
+      const ids = Array.isArray(body.reservation_ids) ? body.reservation_ids.filter(Boolean) : []
+      if (ids.length === 0) return handleCORS(NextResponse.json({ error: 'reservation_ids required' }, { status: 400 }))
+
+      // Defence: only claim ones whose contact info matches THIS user.
+      const matchers = []
+      if (user.email) matchers.push({ email: { $regex: `^${user.email}$`, $options: 'i' } })
+      if (user.phone) {
+        const tail = user.phone.replace(/\D/g, '').slice(-7)
+        if (tail) matchers.push({ phone: { $regex: tail.split('').join('\\D*') } })
+      }
+      if (matchers.length === 0) {
+        return handleCORS(NextResponse.json({ error: 'Profile missing email/phone' }, { status: 400 }))
+      }
+
+      const result = await db.collection('reservations').updateMany(
+        { id: { $in: ids }, user_id: null, $or: matchers },
+        { $set: { user_id: user.id, linked_at: new Date() } }
+      )
+      return handleCORS(NextResponse.json({ ok: true, linked: result.modifiedCount || 0 }))
     }
 
     // GET /users/me/favorites — returns the dish documents (not just ids)

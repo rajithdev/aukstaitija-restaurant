@@ -8,42 +8,13 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/lib/AppContext'
 import { toast } from 'sonner'
+import ReservationTimeline, {
+  STATUS_HEADLINES, REVEAL_AFTER_INDEX, statusIndex, isTableRevealed,
+} from '@/components/ReservationTimeline'
 import {
-  Bell, BellOff, Check, Clock, MapPin, Users, Calendar,
-  Hourglass, ShieldCheck, Table as TableIcon, UserCheck, Flag, ChevronLeft,
-  Sparkles, BadgeCheck,
+  Bell, BellOff, Clock, MapPin, Users, Calendar,
+  Flag, ChevronLeft, Sparkles, Link2, ChevronRight,
 } from 'lucide-react'
-
-// The customer-visible reservation lifecycle. Order matters — used to
-// compute "current step" indices and decide what to reveal in the UI.
-const TIMELINE_STEPS = [
-  { key: 'pending', label: 'Pending', icon: Hourglass, blurb: 'We\'ve got your request' },
-  { key: 'confirmed', label: 'Confirmed', icon: ShieldCheck, blurb: 'Reservation locked in' },
-  { key: 'table_assigned', label: 'Table Assigned', icon: TableIcon, blurb: 'Your table is ready' },
-  { key: 'arrived', label: 'Arrived', icon: UserCheck, blurb: 'Welcome to Aukštaitija' },
-  { key: 'checked_in', label: 'Checked In', icon: BadgeCheck, blurb: 'Seated and dining' },
-  { key: 'completed', label: 'Completed', icon: Flag, blurb: 'Thank you for visiting' },
-]
-
-const REVEAL_AFTER_INDEX = TIMELINE_STEPS.findIndex(s => s.key === 'table_assigned')
-
-// Map raw status → the subtitle the customer should see at the top of the
-// reservation card. Keep this concise — full details live in the body.
-const STATUS_HEADLINES = {
-  pending: 'Reservation received',
-  confirmed: 'Reservation confirmed. Table will be assigned shortly.',
-  table_assigned: 'Your table is ready',
-  arrived: 'You\'ve arrived — welcome',
-  checked_in: 'You\'re seated. Enjoy your meal',
-  completed: 'Visit complete — thank you',
-  cancelled: 'Reservation cancelled',
-  no_show: 'Marked as no-show',
-}
-
-function statusIndex(status) {
-  const idx = TIMELINE_STEPS.findIndex(s => s.key === status)
-  return idx === -1 ? 0 : idx
-}
 
 function formatRelative(dt) {
   if (!dt) return ''
@@ -52,62 +23,6 @@ function formatRelative(dt) {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
   return new Date(dt).toLocaleDateString()
-}
-
-function ReservationTimeline({ reservation }) {
-  const currentIdx = statusIndex(reservation.status)
-  const interrupted = reservation.status === 'cancelled' || reservation.status === 'no_show'
-
-  return (
-    <div className="relative">
-      {/* connector line */}
-      <div className="absolute left-0 right-0 top-5 h-0.5 bg-border" />
-      <div
-        className="absolute left-0 top-5 h-0.5 bg-primary transition-all duration-700 ease-out"
-        style={{ width: `${(Math.max(currentIdx, 0) / (TIMELINE_STEPS.length - 1)) * 100}%` }}
-      />
-
-      <ol className="relative grid grid-cols-6 gap-2">
-        {TIMELINE_STEPS.map((step, idx) => {
-          const Icon = step.icon
-          const isDone = idx < currentIdx && !interrupted
-          const isCurrent = idx === currentIdx && !interrupted
-          const isUpcoming = idx > currentIdx || interrupted
-
-          return (
-            <li key={step.key} className="flex flex-col items-center text-center">
-              <div
-                className={[
-                  'relative z-10 flex h-10 w-10 items-center justify-center rounded-full border-2 transition-all',
-                  isDone && 'bg-primary border-primary text-primary-foreground shadow-md',
-                  isCurrent && 'bg-primary/15 border-primary text-primary ring-4 ring-primary/20 animate-pulse',
-                  isUpcoming && 'bg-background border-border text-muted-foreground',
-                ].filter(Boolean).join(' ')}
-              >
-                {isDone ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
-              </div>
-              <p
-                className={[
-                  'mt-2 text-[10px] sm:text-xs font-medium uppercase tracking-wider leading-tight',
-                  isCurrent && 'text-primary',
-                  isDone && 'text-foreground',
-                  isUpcoming && 'text-muted-foreground/60',
-                ].filter(Boolean).join(' ')}
-              >
-                {step.label}
-              </p>
-            </li>
-          )
-        })}
-      </ol>
-
-      {interrupted && (
-        <p className="mt-4 text-center text-xs uppercase tracking-wider text-destructive">
-          {reservation.status === 'cancelled' ? 'Reservation cancelled' : 'Marked as no-show'}
-        </p>
-      )}
-    </div>
-  )
 }
 
 function ReservationCard({ reservation, onUpdate }) {
@@ -219,6 +134,19 @@ function ReservationCard({ reservation, onUpdate }) {
             </p>
           </div>
         )}
+        {reservation.reservation_code && (
+          <div className="sm:col-span-2 pt-3 mt-1 border-t border-border/60 flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Code <span className="font-mono text-foreground">{reservation.reservation_code}</span>
+            </p>
+            <Link
+              href={`/reservation/${reservation.reservation_code}`}
+              className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+            >
+              Open live tracker <ChevronRight className="h-3 w-3" />
+            </Link>
+          </div>
+        )}
       </div>
     </Card>
   )
@@ -306,6 +234,11 @@ function ProfileReservationsPage() {
   const [unreadCount, setUnreadCount] = useState(0)
   const [loadingNotif, setLoadingNotif] = useState(true)
   const [loadingRes, setLoadingRes] = useState(true)
+  // Guest reservations matching this user's email/phone that haven't been
+  // claimed yet. Surfaces the "We found your previous reservations" prompt.
+  const [linkable, setLinkable] = useState([])
+  const [linkBusy, setLinkBusy] = useState(false)
+  const [linkDismissed, setLinkDismissed] = useState(false)
 
   useEffect(() => {
     if (authChecked && !user) router.replace('/login?next=/profile/reservations')
@@ -334,17 +267,29 @@ function ProfileReservationsPage() {
     }
   }, [])
 
+  const loadLinkable = useCallback(async () => {
+    try {
+      const res = await fetch('/api/users/me/linkable-reservations', { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setLinkable(data.reservations || [])
+      }
+    } catch {}
+  }, [])
+
   useEffect(() => {
     if (!user) return
     loadReservations()
     loadNotifications()
-    // Poll every 20s so a freshly-assigned table appears without a manual refresh.
+    loadLinkable()
+    // Live-refresh every 10s so freshly-assigned tables and incoming
+    // notifications appear without the user having to reload.
     const id = setInterval(() => {
       loadReservations()
       loadNotifications()
-    }, 20000)
+    }, 10000)
     return () => clearInterval(id)
-  }, [user, loadReservations, loadNotifications])
+  }, [user, loadReservations, loadNotifications, loadLinkable])
 
   const markRead = async (id) => {
     await fetch(`/api/notifications/${id}/read`, { method: 'POST', credentials: 'include' })
@@ -358,6 +303,31 @@ function ProfileReservationsPage() {
       setNotifications(prev => prev.map(n => ({ ...n, read: true })))
       setUnreadCount(0)
       toast.success('All notifications marked as read')
+    }
+  }
+
+  const linkReservations = async () => {
+    if (linkable.length === 0) return
+    setLinkBusy(true)
+    try {
+      const res = await fetch('/api/users/me/link-reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ reservation_ids: linkable.map(r => r.id) }),
+      })
+      const data = await res.json()
+      if (res.ok && data.linked > 0) {
+        toast.success(`Linked ${data.linked} reservation${data.linked === 1 ? '' : 's'} to your account`)
+        setLinkable([])
+        await loadReservations()
+      } else {
+        toast.error(data.error || 'No reservations linked')
+      }
+    } catch {
+      toast.error('Could not link reservations')
+    } finally {
+      setLinkBusy(false)
     }
   }
 
@@ -406,6 +376,45 @@ function ProfileReservationsPage() {
             Track each booking from request to seated. Your table number appears here the moment our manager assigns it.
           </p>
         </div>
+
+        {/* Linkable-reservations prompt */}
+        {!linkDismissed && linkable.length > 0 && (
+          <Card className="mb-8 border-primary/40 bg-gradient-to-br from-primary/10 via-primary/5 to-transparent">
+            <div className="p-5 flex items-start gap-4">
+              <div className="p-3 rounded-full bg-primary/15 text-primary shrink-0">
+                <Link2 className="h-5 w-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-serif text-lg mb-1">We found your previous reservations</h3>
+                <p className="text-sm text-muted-foreground mb-3">
+                  We spotted {linkable.length} reservation{linkable.length === 1 ? '' : 's'} matching your email or phone that aren't linked to your account yet. Link them so they show up here forever.
+                </p>
+                <ul className="space-y-1 mb-4 text-xs text-muted-foreground">
+                  {linkable.slice(0, 3).map(r => (
+                    <li key={r.id} className="flex items-center gap-2">
+                      <span className="font-mono text-primary/80">{r.reservation_code || r.confirmation}</span>
+                      <span>·</span>
+                      <span>{r.date} at {r.time}</span>
+                      <span>·</span>
+                      <span>{r.guests} {r.guests === 1 ? 'guest' : 'guests'}</span>
+                    </li>
+                  ))}
+                  {linkable.length > 3 && (
+                    <li className="text-muted-foreground/70">+ {linkable.length - 3} more</li>
+                  )}
+                </ul>
+                <div className="flex gap-2 flex-wrap">
+                  <Button onClick={linkReservations} disabled={linkBusy} size="sm">
+                    {linkBusy ? 'Linking…' : `Link ${linkable.length} reservation${linkable.length === 1 ? '' : 's'}`}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setLinkDismissed(true)}>
+                    Not now
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </Card>
+        )}
 
         {/* Notification center */}
         <div className="mb-10">
