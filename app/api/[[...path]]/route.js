@@ -1406,22 +1406,34 @@ async function handleRoute(request, { params }) {
       const reservation = await db.collection('reservations').findOne({ id: path[1] })
       if (!reservation) return handleCORS(NextResponse.json({ error: 'Reservation not found' }, { status: 404 }))
       
-      // Get all tables that can accommodate the party size
+      // Get all tables that can accommodate the party size, excluding non-assignable statuses
       const allTables = await db.collection('tables').find({
         capacity: { $gte: reservation.guests },
-        status: { $nin: ['out_of_service'] }
+        status: { $nin: ['out_of_service', 'occupied', 'cleaning'] }
       }).sort({ capacity: 1, number: 1 }).toArray()
       
-      // Filter out tables that are already reserved for the same time slot
-      const conflictingReservations = await db.collection('reservations').find({
+      // Calculate 90-minute overlap window for this reservation
+      const resStart = timeStrToMinutes(reservation.time)
+      const resEnd = resStart + RESERVATION_DURATION_MIN
+      
+      // Find all reservations on the same date that overlap with this reservation's 90-min window
+      const sameDayReservations = await db.collection('reservations').find({
         id: { $ne: reservation.id },
         date: reservation.date,
-        time: reservation.time,
         status: { $in: ['pending', 'confirmed', 'table_assigned', 'arrived'] },
         table_id: { $ne: null }
       }).toArray()
       
-      const blockedTableIds = new Set(conflictingReservations.map(r => r.table_id))
+      // Filter to only overlapping reservations (90-minute overlap detection)
+      const overlappingReservations = sameDayReservations.filter(r => {
+        const rStart = timeStrToMinutes(r.time)
+        if (Number.isNaN(rStart)) return false
+        const rEnd = rStart + RESERVATION_DURATION_MIN
+        // Standard half-open interval overlap: rEnd > resStart && rStart < resEnd
+        return rEnd > resStart && rStart < resEnd
+      })
+      
+      const blockedTableIds = new Set(overlappingReservations.map(r => r.table_id))
       const availableTables = allTables.filter(t => !blockedTableIds.has(t.id))
 
       // Enrich each table with its nearest upcoming reservation (other than the
