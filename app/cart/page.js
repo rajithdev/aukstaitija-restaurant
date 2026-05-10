@@ -81,7 +81,7 @@ function CartPage() {
               <span>{t('cart.total')}</span><span className="text-primary">€{total.toFixed(2)}</span>
             </div>
             <Link href={`/checkout?discount=${discount}&coupon=${coupon}`}>
-              <Button size="lg" className="w-full h-12">{t('cart.checkout')}</Button>
+              <Button size="lg" className="w-full h-12">Place Order</Button>
             </Link>
           </Card>
         </div>
