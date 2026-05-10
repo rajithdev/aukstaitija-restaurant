@@ -6,8 +6,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   ChefHat, Truck, ShoppingBag, Utensils, Clock, Bell, BellOff, LogOut,
-  ArrowLeft, Volume2, Flame, CheckCircle2, PackageCheck, Bike, X,
-  LayoutGrid, Inbox, Soup, Settings, History, Activity, Hand,
+  ArrowLeft, Volume2, Flame, CheckCircle2, PackageCheck, Bike,
+  LayoutGrid, Inbox, Soup, Settings, History, Activity,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import DispatchModal from '@/components/DispatchModal'
@@ -38,7 +38,7 @@ const Pill = ({ children, className = '' }) => (
 
 // ── Order card ──────────────────────────────────────────────────────────────
 // One unified card that adapts its accent + actions to the column it lives in.
-function OrderCard({ order, now, onAccept, onReject, onReady, onDispatch, onPickedUp, onPriority, onNotifyWaiter, onServed }) {
+function OrderCard({ order, now, onAccept, onReject, onReady, onDispatch, onPickedUp, onPriority, onServed }) {
   const TypeIcon = TYPE_ICONS[order.type] || ShoppingBag
   const createdMs = now - new Date(order.created_at).getTime()
   const acceptedMs = order.accepted_at ? now - new Date(order.accepted_at).getTime() : 0
@@ -202,7 +202,7 @@ function OrderCard({ order, now, onAccept, onReject, onReady, onDispatch, onPick
                 </Button>
               )}
               <Button onClick={() => onReady(order.id)} className="flex-1 h-12 text-[15px] font-semibold bg-gradient-to-b from-sky-500 to-sky-700 hover:from-sky-400 hover:to-sky-600 text-white shadow-lg shadow-sky-500/30 border-0">
-                <PackageCheck className="h-4 w-4 mr-2" /> Mark Ready
+                <PackageCheck className="h-4 w-4 mr-2" /> Food Ready
               </Button>
             </>
           )}
@@ -217,14 +217,10 @@ function OrderCard({ order, now, onAccept, onReject, onReady, onDispatch, onPick
             </Button>
           )}
           {order.status === 'ready' && isDineIn && (
-            <>
-              <Button onClick={() => onNotifyWaiter(order)} className="flex-1 h-12 text-[15px] font-semibold bg-gradient-to-b from-amber-300 to-amber-500 hover:from-amber-200 hover:to-amber-400 text-zinc-950 shadow-lg shadow-amber-500/30 border-0">
-                <Hand className="h-4 w-4 mr-2" /> Notify Waiter
-              </Button>
-              <Button onClick={() => onServed(order.id)} variant="outline" className="h-12 px-4 bg-white/5 hover:bg-white/10 border-white/10 text-zinc-300">
-                Served
-              </Button>
-            </>
+            <div className="flex-1 h-12 px-4 rounded-md bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center gap-2 text-sm text-emerald-300 font-semibold">
+              <CheckCircle2 className="h-4 w-4" />
+              <span>Waiter notified · Table {order.table_number || '?'}</span>
+            </div>
           )}
           {order.status === 'ready' && !isDelivery && !isDineIn && (
             <Button onClick={() => onServed(order.id)} className="flex-1 h-12 text-[15px] font-semibold bg-gradient-to-b from-emerald-500 to-emerald-700 hover:from-emerald-400 hover:to-emerald-600 text-white shadow-lg shadow-emerald-500/30 border-0">
@@ -411,11 +407,6 @@ function KitchenPage() {
       await updateOrder(id, { status: 'delivered' })
       toast.success('Handed over')
     }
-  }
-
-  const handleNotifyWaiter = (order) => {
-    playChime('ready')
-    toast.success(`Waiter notified · Table ${order.table_number || '?'}`)
   }
 
   const login = async (e) => {
@@ -711,7 +702,6 @@ function KitchenPage() {
                             onDispatch={handleDispatch}
                             onPickedUp={handlePickedUp}
                             onPriority={(id, p) => updateOrder(id, { priority: p })}
-                            onNotifyWaiter={handleNotifyWaiter}
                             onServed={handleServed}
                           />
                         ))}

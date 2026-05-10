@@ -117,12 +117,17 @@ function OrderTrack() {
       : isReadyWaitingCourier && courierAlreadyRequested
         ? t('track_stage.headline_waiting_courier')
         : t(`track_stage.${kind}.${stages[currentIdx].key}`)
+  } else if (isDineIn && order.waiter_picked_up_at && order.serve_status !== 'served' && order.status === 'ready') {
+    // Waiter is walking the plate to the table — surface that in the headline.
+    headlineLabel = t('track_stage.dinein.plated_hint_on_way')
   } else {
     headlineLabel = t(`track_stage.${kind}.${stages[currentIdx].key}`)
   }
 
   // Pick a per-stage hint based on the current key. Delivery's "ready" stage
-  // has two variants depending on whether the courier has been called.
+  // has two variants depending on whether the courier has been called. For
+  // dine-in, the "plated/Food ready" stage swaps to an "on the way" message
+  // once the waiter has taken the plate off the pass.
   const hintFor = (s) => {
     if (kind === 'delivery' && s.key === 'ready') {
       return courierAlreadyRequested
@@ -131,10 +136,11 @@ function OrderTrack() {
     }
     if (kind === 'delivery' && s.key === 'courier_requested') {
       const provider = providerBadge?.label || 'Courier'
-      // Inject provider name into the (otherwise generic) hint so the guest
-      // sees who is actually delivering.
       const tpl = t('track_stage.delivery.courier_requested_hint')
       return tpl.replace(/^Courier|^Kurjeris/, provider)
+    }
+    if (kind === 'dinein' && s.key === 'plated' && order.waiter_picked_up_at && order.serve_status !== 'served') {
+      return t('track_stage.dinein.plated_hint_on_way')
     }
     return t(`track_stage.${kind}.${s.key}_hint`)
   }

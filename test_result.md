@@ -724,6 +724,166 @@ backend:
             
             Waiter activity analytics feature is production-ready and working correctly.
 
+  - task: "Auto waiter notifications (collection + endpoints + auto-create on order ready)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            New automatic dine-in waiter workflow. The chef no longer manually notifies the waiter — the system creates a waiter notification automatically the moment a dine-in order's status moves to 'ready'.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ PASS - All waiter notification tests passed (31/31 - 100% success rate)
+            
+            **SCENARIO A: AUTH CHECKS (3/3):**
+            - GET /api/waiter/notifications without x-admin-token → 401 Unauthorized ✅
+            - POST /api/waiter/notifications/:id/pickup without admin token → 401 Unauthorized ✅
+            - POST /api/waiter/notifications/:id/served without admin token → 401 Unauthorized ✅
+            
+            **SCENARIO B: AUTO-CREATE ON READY (5/5):**
+            - Created dine-in order with table_id (Order: AK236680) ✅
+            - Updated order: received → preparing → ready ✅
+            - Notification auto-created with correct fields:
+              * status='pending' ✅
+              * table_name='Table 1' ✅
+              * order_number matches ✅
+              * items_summary contains "2× [dish], 1× Beer" ✅
+              * customer_name='Auto Diner' ✅
+              * picked_up_at and served_at are null ✅
+              * priority is boolean ✅
+            
+            **SCENARIO C: NOT CREATED FOR NON-DINE-IN (3/3):**
+            - Created delivery order (type='delivery') and moved to ready ✅
+            - Created pickup order (type='pickup') and moved to ready ✅
+            - GET /api/waiter/notifications correctly excludes delivery and pickup orders ✅
+            
+            **SCENARIO D: IDEMPOTENCY / NO DUPLICATES (2/2):**
+            - Toggled order status multiple times: preparing → ready → preparing → ready ✅
+            - Still exactly ONE notification for the order (no duplicates created) ✅
+            
+            **SCENARIO E: PICKUP ENDPOINT (4/4):**
+            - POST /api/waiter/notifications/:id/pickup returns 200 ✅
+            - Notification: status='picked_up', picked_up_at set ✅
+            - Order synced: serve_status='picked_up_by_waiter', waiter_picked_up_at set ✅
+            - Order status STAYS 'ready' (not advanced) ✅
+            - Notification still in active feed (picked_up is active) ✅
+            
+            **SCENARIO F: SERVED ENDPOINT (3/3):**
+            - POST /api/waiter/notifications/:id/served returns 200 ✅
+            - Notification: status='served', served_at set ✅
+            - Order finalized: status='delivered', serve_status='served', served_at set, delivered_at set ✅
+            - Notification NOT in active feed anymore (correctly excluded) ✅
+            
+            **SCENARIO G: LEGACY ENDPOINTS SYNC (6/6):**
+            - Created another dine-in order and moved to ready (Order: AK241497) ✅
+            - Notification auto-created (status='pending') ✅
+            - POST /api/orders/:id/waiter-pickup (legacy) works ✅
+            - Notification synced to 'picked_up' ✅
+            - POST /api/orders/:id/served (legacy) works ✅
+            - Notification synced to 'served' and removed from active feed ✅
+            
+            **SCENARIO H: REGRESSIONS (3/3):**
+            - GET /api/waiter/orders still works (returns 0 orders) ✅
+            - GET /api/admin/analytics has waiter.* block:
+              * served_count=7 (increased from baseline) ✅
+              * served_today=2 ✅
+              * All required fields present ✅
+            - GET /api/kitchen/orders still works (returns 2 orders) ✅
+            
+            **CRITICAL VERIFICATION:**
+            - ✅ All auth checks working (401 without admin token)
+            - ✅ Auto-create on ready works for dine-in orders only
+            - ✅ Idempotency working (no duplicate notifications)
+            - ✅ Pickup endpoint syncs both notification and order
+            - ✅ Served endpoint finalizes order and removes notification from feed
+            - ✅ Legacy endpoints sync notifications correctly
+            - ✅ NO REGRESSIONS: All existing endpoints working correctly
+            
+            All automatic waiter notification features implemented correctly and production-ready.
+            No issues found. Backend is stable.
+
+            Schema: waiter_notifications (auto-created on first insert)
+              { id, order_id, order_number, table_id, table_name (e.g. "Table 5"),
+                items_summary (e.g. "1× Cepelinai, 2× Beer"), customer_name, notes,
+                priority, status: 'pending'|'picked_up'|'served',
+                waiter_id (null for now), created_at, picked_up_at, served_at }
+
+            Auto-create trigger:
+              - PUT /api/orders/:id with body {status:'ready'} now also inserts a
+                waiter_notifications doc IF the order is dine-in (type='dine-in' OR
+                order_type='dine_in' OR table_id != null) AND no notification already
+                exists for that order_id.
+              - If a previous notification existed but was 'served' (rare manual
+                rollback), it is re-opened to 'pending'. No duplicates ever created.
+
+            Endpoints (all admin, x-admin-token: admin123):
+              1) GET /api/waiter/notifications
+                 - Returns notifications with status in ['pending', 'picked_up'].
+                 - Sorted by priority desc, created_at asc.
+              2) POST /api/waiter/notifications/:id/pickup
+                 - Sets notification.status='picked_up', picked_up_at=now.
+                 - ALSO updates the underlying order: serve_status='picked_up_by_waiter',
+                   waiter_picked_up_at=now (so customer tracking still works).
+              3) POST /api/waiter/notifications/:id/served
+                 - Sets notification.status='served', served_at=now (and picked_up_at
+                   if missing).
+                 - ALSO finalizes the order: status='delivered', serve_status='served',
+                   delivered_at=now, served_at=now.
+
+            Backwards compatibility:
+              - Existing POST /api/orders/:id/waiter-pickup and /api/orders/:id/served
+                still work and additionally sync the matching notification.
+              - Existing GET /api/waiter/orders still works.
+
+            Test scenarios:
+              A) Auth: GET /api/waiter/notifications without token → 401. Both POST
+                 endpoints without token → 401.
+              B) Auto-create on ready:
+                 1. Create dine-in order via POST /api/orders with table_id.
+                 2. PUT status='preparing'. PUT status='ready'.
+                 3. GET /api/waiter/notifications → array contains a notification with
+                    matching order_id, order_number, status='pending', table_name like
+                    "Table N", items_summary non-empty, picked_up_at and served_at null.
+              C) NOT created for non-dine-in:
+                 1. Create a delivery order, walk to status='ready'. GET notifications →
+                    must NOT include this order.
+                 2. Same for a pickup order (no table_id, type='pickup').
+              D) Idempotent / no duplicates:
+                 1. PUT status='preparing' then PUT status='ready' AGAIN on the same
+                    dine-in order. GET /api/waiter/notifications → still exactly one
+                    notification for this order_id (count of notifications with that
+                    order_id stays at 1).
+              E) Pickup endpoint:
+                 1. POST /api/waiter/notifications/:id/pickup → 200, response
+                    status='picked_up', picked_up_at not null.
+                 2. GET /api/orders/:order_id (or /api/orders/by-number/:order_number)
+                    → order.serve_status='picked_up_by_waiter', waiter_picked_up_at set,
+                    order.status STILL 'ready'.
+                 3. GET /api/waiter/notifications → still includes this notification
+                    (it's now 'picked_up', still active).
+              F) Served endpoint:
+                 1. POST /api/waiter/notifications/:id/served → 200, response
+                    status='served', served_at not null.
+                 2. Order: status='delivered', serve_status='served', served_at not null,
+                    delivered_at not null.
+                 3. GET /api/waiter/notifications → must NOT include this notification.
+              G) Legacy endpoints sync:
+                 1. Create+ready a fresh dine-in order. GET notifications → contains
+                    notification N (pending).
+                 2. POST /api/orders/<order_id>/waiter-pickup (legacy) → notification N
+                    becomes 'picked_up'.
+                 3. POST /api/orders/<order_id>/served (legacy) → notification N becomes
+                    'served' and is no longer in the active feed.
+              H) Regression: existing /waiter/orders endpoint still returns dine-in
+                 ready orders (unchanged behaviour). Admin analytics still works and
+                 waiter.served_count increments on the served flow.
+
   - task: "Waiter dashboard endpoints (GET /waiter/orders, POST /orders/:id/waiter-pickup, POST /orders/:id/served)"
     implemented: true
     working: true
@@ -837,7 +997,8 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Auto waiter notifications (collection + endpoints + auto-create on order ready)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1338,4 +1499,90 @@ agent_communication:
       
       **SUMMARY:**
       All waiter activity analytics features are production-ready and working correctly.
+      No issues found. Backend is stable and complete.
+
+  - agent: "testing"
+    message: |
+      ✅ AUTO WAITER NOTIFICATIONS TESTS - ALL PASSED (31/31 - 100% success rate)
+      
+      Test Run 9 - Automatic Waiter Notification Flow:
+      
+      **NEW FEATURES TESTED:**
+      
+      The automatic waiter notification system creates notifications when dine-in orders become ready:
+      - Auto-creates waiter_notifications document when PUT /api/orders/:id sets status='ready' for dine-in orders
+      - New collection: waiter_notifications with fields: id, order_id, order_number, table_id, table_name, 
+        items_summary, customer_name, notes, priority, status, waiter_id, created_at, picked_up_at, served_at
+      - New endpoints: GET /api/waiter/notifications, POST /api/waiter/notifications/:id/pickup, 
+        POST /api/waiter/notifications/:id/served
+      - Legacy endpoints sync: POST /api/orders/:id/waiter-pickup and POST /api/orders/:id/served
+      
+      **TEST SCENARIOS:**
+      
+      A) Auth Checks (3 tests):
+         - GET /api/waiter/notifications without x-admin-token → 401 ✅
+         - POST /api/waiter/notifications/:id/pickup without admin token → 401 ✅
+         - POST /api/waiter/notifications/:id/served without admin token → 401 ✅
+      
+      B) Auto-Create on Ready (5 tests):
+         - Created dine-in order with table_id (Order: AK236680) ✅
+         - Updated order: received → preparing → ready ✅
+         - Notification auto-created with all correct fields:
+           * status='pending' ✅
+           * table_name='Table 1' ✅
+           * order_number matches ✅
+           * items_summary contains "2× [dish], 1× Beer" ✅
+           * customer_name='Auto Diner' ✅
+           * picked_up_at and served_at are null ✅
+           * priority is boolean ✅
+      
+      C) Not Created for Non-Dine-In (3 tests):
+         - Created delivery order (type='delivery') and moved to ready ✅
+         - Created pickup order (type='pickup') and moved to ready ✅
+         - GET /api/waiter/notifications correctly excludes delivery and pickup orders ✅
+      
+      D) Idempotency / No Duplicates (2 tests):
+         - Toggled order status multiple times: preparing → ready → preparing → ready ✅
+         - Still exactly ONE notification for the order (no duplicates created) ✅
+      
+      E) Pickup Endpoint (4 tests):
+         - POST /api/waiter/notifications/:id/pickup returns 200 ✅
+         - Notification: status='picked_up', picked_up_at set ✅
+         - Order synced: serve_status='picked_up_by_waiter', waiter_picked_up_at set ✅
+         - Order status STAYS 'ready' (not advanced) ✅
+         - Notification still in active feed (picked_up is active) ✅
+      
+      F) Served Endpoint (3 tests):
+         - POST /api/waiter/notifications/:id/served returns 200 ✅
+         - Notification: status='served', served_at set ✅
+         - Order finalized: status='delivered', serve_status='served', served_at set, delivered_at set ✅
+         - Notification NOT in active feed anymore (correctly excluded) ✅
+      
+      G) Legacy Endpoints Sync (6 tests):
+         - Created another dine-in order and moved to ready (Order: AK241497) ✅
+         - Notification auto-created (status='pending') ✅
+         - POST /api/orders/:id/waiter-pickup (legacy) works ✅
+         - Notification synced to 'picked_up' ✅
+         - POST /api/orders/:id/served (legacy) works ✅
+         - Notification synced to 'served' and removed from active feed ✅
+      
+      H) Regressions (3 tests):
+         - GET /api/waiter/orders still works (returns 0 orders) ✅
+         - GET /api/admin/analytics has waiter.* block:
+           * served_count=7 (increased from baseline) ✅
+           * served_today=2 ✅
+           * All required fields present ✅
+         - GET /api/kitchen/orders still works (returns 2 orders) ✅
+      
+      **CRITICAL VERIFICATION:**
+      - ✅ All auth checks working (401 without admin token)
+      - ✅ Auto-create on ready works for dine-in orders only
+      - ✅ Idempotency working (no duplicate notifications)
+      - ✅ Pickup endpoint syncs both notification and order
+      - ✅ Served endpoint finalizes order and removes notification from feed
+      - ✅ Legacy endpoints sync notifications correctly
+      - ✅ NO REGRESSIONS: All existing endpoints working correctly
+      
+      **SUMMARY:**
+      All automatic waiter notification features are production-ready and working correctly.
       No issues found. Backend is stable and complete.

@@ -121,6 +121,21 @@ function stripId(doc) {
   return rest
 }
 
+// True if an order is dine-in. Different parts of the app set different fields
+// (legacy `type`, newer `order_type`, table_id), so check all three.
+function isDineIn(order) {
+  if (!order) return false
+  return order.type === 'dine-in' || order.order_type === 'dine_in' || !!order.table_id
+}
+
+// Compact "1× Cepelinai, 2× Beer" string used in waiter notifications. Caps
+// long lists with a "… +N more" tail so the notification card stays readable.
+function summariseItems(items, max = 4) {
+  if (!Array.isArray(items) || items.length === 0) return ''
+  const head = items.slice(0, max).map(i => `${i.quantity || 1}× ${i.name}`).join(', ')
+  return items.length > max ? `${head}, +${items.length - max} more` : head
+}
+
 async function handleRoute(request, { params }) {
   const { path = [] } = params
   const route = `/${path.join('/')}`
@@ -418,6 +433,40 @@ async function handleRoute(request, { params }) {
       if (body.payment_status) update.payment_status = body.payment_status
       await db.collection('orders').updateOne({ id: path[1] }, { $set: update })
       const updated = await db.collection('orders').findOne({ id: path[1] })
+
+      // ── Auto-notify waiter when a dine-in order becomes 'ready' ──────────
+      // This replaces the old manual "Notify Waiter" button. The notification
+      // is created exactly once per order; if the chef toggles ready/preparing
+      // we don't spam — we re-open the existing pending notification or just
+      // leave the existing one alone.
+      if (body.status === 'ready' && updated && isDineIn(updated)) {
+        const existing = await db.collection('waiter_notifications').findOne({ order_id: updated.id })
+        if (!existing) {
+          await db.collection('waiter_notifications').insertOne({
+            id: uuidv4(),
+            order_id: updated.id,
+            order_number: updated.order_number,
+            table_id: updated.table_id || null,
+            table_name: updated.table_number ? `Table ${updated.table_number}` : null,
+            items_summary: summariseItems(updated.items),
+            customer_name: updated.customer?.name || 'Guest',
+            notes: updated.notes || '',
+            priority: !!updated.priority,
+            status: 'pending',
+            waiter_id: null,
+            created_at: new Date(),
+            picked_up_at: null,
+            served_at: null,
+          })
+        } else if (existing.status === 'served') {
+          // Order was bounced back from served (rare manual fix) — re-open it.
+          await db.collection('waiter_notifications').updateOne(
+            { id: existing.id },
+            { $set: { status: 'pending', served_at: null, picked_up_at: null, created_at: new Date() } }
+          )
+        }
+      }
+
       return handleCORS(NextResponse.json(stripId(updated)))
     }
 
@@ -446,35 +495,101 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json(orders.map(stripId)))
     }
 
-    // POST /orders/:id/waiter-pickup (admin) — waiter picked the plate up from
-    // the pass and is walking it to the table. Status stays 'ready' (it's still
-    // on a tray) but we mark serve_status so customer/kitchen know it's moving.
+    // GET /waiter/notifications (admin) — primary feed for the waiter dashboard.
+    // Returns pending + picked_up notifications, newest at the top of "pending"
+    // so chime/highlight detection on the client is straightforward.
+    if (route === '/waiter/notifications' && method === 'GET') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const list = await db.collection('waiter_notifications').find({
+        status: { $in: ['pending', 'picked_up'] }
+      }).sort({ priority: -1, created_at: 1 }).toArray()
+      return handleCORS(NextResponse.json(list.map(stripId)))
+    }
+
+    // POST /waiter/notifications/:id/pickup (admin) — waiter takes the plate
+    // off the pass. Updates BOTH the notification and the underlying order so
+    // existing customer tracking (waiter_picked_up_at, serve_status) keeps working.
+    if (path[0] === 'waiter' && path[1] === 'notifications' && path.length === 4 && path[3] === 'pickup' && method === 'POST') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const notif = await db.collection('waiter_notifications').findOne({ id: path[2] })
+      if (!notif) return handleCORS(NextResponse.json({ error: 'Notification not found' }, { status: 404 }))
+      const now = new Date()
+      await db.collection('waiter_notifications').updateOne(
+        { id: notif.id },
+        { $set: { status: 'picked_up', picked_up_at: now } }
+      )
+      await db.collection('orders').updateOne(
+        { id: notif.order_id },
+        { $set: { serve_status: 'picked_up_by_waiter', waiter_picked_up_at: now, updated_at: now } }
+      )
+      const updated = await db.collection('waiter_notifications').findOne({ id: notif.id })
+      return handleCORS(NextResponse.json(stripId(updated)))
+    }
+
+    // POST /waiter/notifications/:id/served (admin) — waiter has placed the
+    // food on the table. Closes the notification and finalizes the order
+    // (status='delivered' + serve_status='served' + delivered_at + served_at).
+    if (path[0] === 'waiter' && path[1] === 'notifications' && path.length === 4 && path[3] === 'served' && method === 'POST') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const notif = await db.collection('waiter_notifications').findOne({ id: path[2] })
+      if (!notif) return handleCORS(NextResponse.json({ error: 'Notification not found' }, { status: 404 }))
+      const now = new Date()
+      await db.collection('waiter_notifications').updateOne(
+        { id: notif.id },
+        { $set: { status: 'served', served_at: now, picked_up_at: notif.picked_up_at || now } }
+      )
+      await db.collection('orders').updateOne(
+        { id: notif.order_id },
+        { $set: {
+          serve_status: 'served',
+          served_at: now,
+          status: 'delivered',
+          delivered_at: now,
+          updated_at: now,
+        } }
+      )
+      const updated = await db.collection('waiter_notifications').findOne({ id: notif.id })
+      return handleCORS(NextResponse.json(stripId(updated)))
+    }
+
+    // POST /orders/:id/waiter-pickup (admin) — legacy pickup endpoint kept for
+    // backward compatibility. Also syncs the matching notification if any.
     if (path[0] === 'orders' && path.length === 3 && path[2] === 'waiter-pickup' && method === 'POST') {
       if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
       const order = await db.collection('orders').findOne({ id: path[1] })
       if (!order) return handleCORS(NextResponse.json({ error: 'Order not found' }, { status: 404 }))
+      const now = new Date()
       await db.collection('orders').updateOne({ id: path[1] }, { $set: {
         serve_status: 'picked_up_by_waiter',
-        waiter_picked_up_at: new Date(),
-        updated_at: new Date(),
+        waiter_picked_up_at: now,
+        updated_at: now,
       } })
+      await db.collection('waiter_notifications').updateOne(
+        { order_id: path[1], status: 'pending' },
+        { $set: { status: 'picked_up', picked_up_at: now } }
+      )
       const updated = await db.collection('orders').findOne({ id: path[1] })
       return handleCORS(NextResponse.json(stripId(updated)))
     }
 
-    // POST /orders/:id/served (admin) — waiter has just placed the food on the
-    // guest's table. This is the dine-in equivalent of 'delivered'.
+    // POST /orders/:id/served (admin) — legacy served endpoint kept for
+    // backward compatibility. Also closes the matching notification if any.
     if (path[0] === 'orders' && path.length === 3 && path[2] === 'served' && method === 'POST') {
       if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
       const order = await db.collection('orders').findOne({ id: path[1] })
       if (!order) return handleCORS(NextResponse.json({ error: 'Order not found' }, { status: 404 }))
+      const now = new Date()
       await db.collection('orders').updateOne({ id: path[1] }, { $set: {
         serve_status: 'served',
-        served_at: new Date(),
+        served_at: now,
         status: 'delivered',
-        delivered_at: new Date(),
-        updated_at: new Date(),
+        delivered_at: now,
+        updated_at: now,
       } })
+      await db.collection('waiter_notifications').updateOne(
+        { order_id: path[1], status: { $in: ['pending', 'picked_up'] } },
+        { $set: { status: 'served', served_at: now } }
+      )
       const updated = await db.collection('orders').findOne({ id: path[1] })
       return handleCORS(NextResponse.json(stripId(updated)))
     }
