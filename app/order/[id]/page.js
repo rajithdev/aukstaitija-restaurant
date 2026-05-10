@@ -30,7 +30,6 @@ const STAGES_PICKUP = [
 
 const STAGES_DINEIN = [
   { key: 'received', icon: Clock },
-  { key: 'confirmed', icon: ChefHat },
   { key: 'in_kitchen', icon: Soup },
   { key: 'ready', icon: Utensils },
 ]
@@ -59,13 +58,9 @@ function progressIndex(order, kind) {
     return 0
   }
   if (kind === 'dinein') {
-    // Simplified 4-stage flow: received → confirmed → in_kitchen → ready
-    if (order.serve_status === 'served' || order.status === 'delivered' || order.status === 'ready') return 3
-    if (order.status === 'preparing') {
-      const acc = order.accepted_at ? new Date(order.accepted_at).getTime() : 0
-      if (acc && Date.now() - acc > COOKING_BUMP_MS) return 2
-      return 1
-    }
+    // Simplified 3-stage flow: received → in_kitchen → ready
+    if (order.serve_status === 'served' || order.status === 'delivered' || order.status === 'ready') return 2
+    if (order.status === 'preparing') return 1
     return 0
   }
   // pickup
@@ -127,7 +122,7 @@ function OrderTrack() {
 
   // Pick a per-stage hint based on the current key. Delivery's "ready" stage
   // has two variants depending on whether the courier has been called. For
-  // dine-in, the "ready/Food ready" stage shows "on the way" message
+  // Warm, reassuring hint text for dine-in stages
   const hintFor = (s) => {
     if (kind === 'delivery' && s.key === 'ready') {
       return courierAlreadyRequested
@@ -139,8 +134,10 @@ function OrderTrack() {
       const tpl = t('track_stage.delivery.courier_requested_hint')
       return tpl.replace(/^Courier|^Kurjeris/, provider)
     }
-    if (kind === 'dinein' && s.key === 'ready') {
-      return 'Your food is ready — a waiter will bring it to your table'
+    if (kind === 'dinein') {
+      if (s.key === 'received') return 'We have your order.'
+      if (s.key === 'in_kitchen') return 'Our chefs are preparing your dishes.'
+      if (s.key === 'ready') return 'Your food is ready and on the way to your table.'
     }
     return t(`track_stage.${kind}.${s.key}_hint`)
   }
