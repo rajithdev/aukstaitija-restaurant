@@ -103,6 +103,80 @@
 #====================================================================================================
 
 user_problem_statement: |
+  Simplify the customer reservation tracker:
+  - Reduce timeline to 3 customer-visible stages: Pending, Confirmed, Table Assigned.
+    Remove arrived / checked-in / completed timeline steps from the customer view.
+  - Status messages:
+      pending     → "We've received your reservation request."
+      confirmed   → "Your reservation is confirmed. Your table will be assigned shortly."
+      table_assigned → "Your table is ready."
+  - Pending/Confirmed cards: show only date, time, guest count.
+  - Table Assigned card: replace status content with a premium table card.
+  - Remove: internal confirmation id, occasion display, notes display,
+    seating preference, sparkle "table will be revealed" hint.
+  - Keep: reservation code, live auto-refresh, refresh button, guest recovery prompt.
+
+frontend:
+  - task: "Simplify ReservationTimeline to 3 stages and update headlines"
+    implemented: true
+    working: true
+    file: "components/ReservationTimeline.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            TIMELINE_STEPS reduced from 6 to 3. arrived/checked_in/completed are
+            collapsed onto table_assigned via statusIndex(). STATUS_HEADLINES updated
+            with the three customer-facing messages. Grid changed from grid-cols-6
+            to grid-cols-3. isTableRevealed() also returns true for completed.
+
+  - task: "Simplify guest reservation tracker page"
+    implemented: true
+    working: true
+    file: "app/reservation/[code]/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Pending/Confirmed show date/time/guests. Table Assigned shows premium
+            card (Table T#, Section, 12h Time, Guests). Removed seating, occasion,
+            notes, internal confirmation, sparkle hint. Kept reservation code +
+            copy, 5s live polling, refresh button, guest-recovery prompt.
+            Verified visually for both confirmed and table_assigned states.
+
+  - task: "Simplify profile reservation cards"
+    implemented: true
+    working: true
+    file: "app/profile/reservations/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Same simplification: removed #confirmation, seating, occasion, notes,
+            sparkle hint; kept reservation code + tracker link; replaced basic info
+            with premium card on table_assigned. Removed unused imports (Sparkles,
+            REVEAL_AFTER_INDEX, statusIndex).
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Customer reservation tracker simplified to 3 stages. Frontend-only change.
+        Lint clean. Visually validated both Confirmed and Table Assigned states.
+
+#====================================================================================================
+# Historical session below
+#====================================================================================================
+
+user_problem_statement: |
   Improve the Assign Table modal so manager can quickly decide whether a reserved/occupied
   table can be used temporarily for walk-ins:
   - Reserved tables must show reservation timing (absolute or relative).

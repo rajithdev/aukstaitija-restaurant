@@ -1,46 +1,57 @@
 'use client'
 import {
-  Hourglass, ShieldCheck, Table as TableIcon, UserCheck, Flag, BadgeCheck,
+  Hourglass, ShieldCheck, Table as TableIcon,
   Check, Clock, MapPin, Users, Calendar, Sparkles,
 } from 'lucide-react'
 
 // Customer-visible reservation lifecycle. Order matters — used to compute
 // "current step" indices and decide what to reveal.
+//
+// Operational stages (arrived / checked_in / completed) are deliberately
+// excluded — customers should only see: received → confirmed → table ready.
 export const TIMELINE_STEPS = [
   { key: 'pending', label: 'Pending', icon: Hourglass, blurb: "We've got your request" },
   { key: 'confirmed', label: 'Confirmed', icon: ShieldCheck, blurb: 'Reservation locked in' },
   { key: 'table_assigned', label: 'Table Assigned', icon: TableIcon, blurb: 'Your table is ready' },
-  { key: 'arrived', label: 'Arrived', icon: UserCheck, blurb: 'Welcome to Aukštaitija' },
-  { key: 'checked_in', label: 'Checked In', icon: BadgeCheck, blurb: 'Seated and dining' },
-  { key: 'completed', label: 'Completed', icon: Flag, blurb: 'Thank you for visiting' },
 ]
 
 export const REVEAL_AFTER_INDEX = TIMELINE_STEPS.findIndex(s => s.key === 'table_assigned')
 
 export const STATUS_HEADLINES = {
-  pending: 'Reservation received',
-  confirmed: 'Reservation confirmed. Table will be assigned shortly.',
-  table_assigned: 'Your table is ready',
-  arrived: "You've arrived — welcome",
-  checked_in: "You're seated. Enjoy your meal",
-  completed: 'Visit complete — thank you',
+  pending: "We've received your reservation request.",
+  confirmed: 'Your reservation is confirmed. Your table will be assigned shortly.',
+  table_assigned: 'Your table is ready.',
+  // Operational statuses still possible on the back end — collapse them into
+  // the table-ready experience so the customer never sees stage churn after
+  // the table has been assigned.
+  arrived: 'Your table is ready.',
+  checked_in: 'Your table is ready.',
+  completed: 'Your table is ready.',
   cancelled: 'Reservation cancelled',
   no_show: 'Marked as no-show',
 }
 
 export function statusIndex(status) {
-  const idx = TIMELINE_STEPS.findIndex(s => s.key === status)
+  // Map operational statuses (arrived/checked_in/completed) to the customer's
+  // last visible stage — table_assigned — so the timeline doesn't appear stuck
+  // or jump past the simplified 3-step flow.
+  const collapsed = ['arrived', 'checked_in', 'completed'].includes(status)
+    ? 'table_assigned'
+    : status
+  const idx = TIMELINE_STEPS.findIndex(s => s.key === collapsed)
   return idx === -1 ? 0 : idx
 }
 
 export function isTableRevealed(status) {
-  return ['table_assigned', 'arrived', 'checked_in'].includes(status)
+  // Once a table is assigned, keep it revealed for any downstream operational
+  // status (arrived, checked_in, completed) so the customer's premium card
+  // never disappears mid-experience.
+  return ['table_assigned', 'arrived', 'checked_in', 'completed'].includes(status)
 }
 
 export default function ReservationTimeline({ reservation, compact = false }) {
   const currentIdx = statusIndex(reservation.status)
   const interrupted = reservation.status === 'cancelled' || reservation.status === 'no_show'
-  const completed = reservation.status === 'completed'
 
   return (
     <div className="relative">
@@ -55,11 +66,11 @@ export default function ReservationTimeline({ reservation, compact = false }) {
         }}
       />
 
-      <ol className="relative grid grid-cols-6 gap-1 sm:gap-2">
+      <ol className="relative grid grid-cols-3 gap-2 sm:gap-4">
         {TIMELINE_STEPS.map((step, idx) => {
           const Icon = step.icon
-          const isDone = (idx < currentIdx && !interrupted) || (completed && idx <= currentIdx)
-          const isCurrent = idx === currentIdx && !interrupted && !completed
+          const isDone = idx < currentIdx && !interrupted
+          const isCurrent = idx === currentIdx && !interrupted
           const isUpcoming = idx > currentIdx || interrupted
 
           return (
@@ -76,7 +87,7 @@ export default function ReservationTimeline({ reservation, compact = false }) {
               </div>
               <p
                 className={[
-                  'mt-2 text-[10px] sm:text-xs font-medium uppercase tracking-wider leading-tight',
+                  'mt-2 text-[11px] sm:text-xs font-medium uppercase tracking-wider leading-tight',
                   isCurrent && 'text-primary',
                   isDone && 'text-foreground',
                   isUpcoming && 'text-muted-foreground/60',

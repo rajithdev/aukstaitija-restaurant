@@ -9,11 +9,11 @@ import { Button } from '@/components/ui/button'
 import { useApp } from '@/lib/AppContext'
 import { toast } from 'sonner'
 import ReservationTimeline, {
-  STATUS_HEADLINES, REVEAL_AFTER_INDEX, statusIndex, isTableRevealed,
+  STATUS_HEADLINES, isTableRevealed,
 } from '@/components/ReservationTimeline'
 import {
   Bell, BellOff, Clock, MapPin, Users, Calendar,
-  Flag, ChevronLeft, Sparkles, Link2, ChevronRight,
+  Flag, ChevronLeft, Link2, ChevronRight,
 } from 'lucide-react'
 
 function formatRelative(dt) {
@@ -25,11 +25,20 @@ function formatRelative(dt) {
   return new Date(dt).toLocaleDateString()
 }
 
+function formatTime12h(timeStr) {
+  if (!timeStr) return ''
+  const [hStr, mStr] = String(timeStr).split(':')
+  const h = parseInt(hStr, 10)
+  const m = parseInt(mStr, 10) || 0
+  if (Number.isNaN(h)) return timeStr
+  const period = h >= 12 ? 'PM' : 'AM'
+  const hour = h === 0 ? 12 : h > 12 ? h - 12 : h
+  return `${hour}:${m.toString().padStart(2, '0')} ${period}`
+}
+
 function ReservationCard({ reservation, onUpdate }) {
-  const statusIdx = statusIndex(reservation.status)
-  const tableRevealed = statusIdx >= REVEAL_AFTER_INDEX &&
-    reservation.status !== 'cancelled' &&
-    reservation.status !== 'no_show'
+  const tableRevealed = isTableRevealed(reservation.status)
+  const interrupted = ['cancelled', 'no_show'].includes(reservation.status)
   const headline = STATUS_HEADLINES[reservation.status] || 'Reservation'
 
   // Pull table number from id (`t4` → `T4`). Section comes from notification meta
@@ -43,35 +52,32 @@ function ReservationCard({ reservation, onUpdate }) {
     <Card className="overflow-hidden">
       {/* Header */}
       <div className="p-6 border-b border-border bg-gradient-to-br from-primary/5 to-transparent">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground mb-1">
-              #{reservation.confirmation}
-            </p>
-            <h3 className="font-serif text-2xl">{headline}</h3>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-muted-foreground">
-              <span className="flex items-center gap-1.5">
-                <Calendar className="h-3.5 w-3.5 text-primary" />
-                {reservation.date}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Clock className="h-3.5 w-3.5 text-primary" />
-                {reservation.time}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Users className="h-3.5 w-3.5 text-primary" />
-                {reservation.guests} {reservation.guests === 1 ? 'guest' : 'guests'}
-              </span>
-            </div>
-          </div>
+        <h3 className="font-serif text-2xl">{headline}</h3>
 
-          {!tableRevealed && reservation.status !== 'cancelled' && reservation.status !== 'no_show' && (
-            <div className="px-3 py-2 rounded-md border border-dashed border-primary/40 bg-primary/5 text-xs text-primary flex items-center gap-2 max-w-[260px]">
-              <Sparkles className="h-3.5 w-3.5 shrink-0" />
-              <span>Table will be revealed once our manager assigns one.</span>
-            </div>
-          )}
-        </div>
+        {/* Pending / Confirmed: show basic info. Table Assigned: hide here —
+            the premium table card below replaces this content. */}
+        {!tableRevealed && !interrupted && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-sm text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <Calendar className="h-3.5 w-3.5 text-primary" />
+              {reservation.date}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5 text-primary" />
+              {formatTime12h(reservation.time)}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Users className="h-3.5 w-3.5 text-primary" />
+              {reservation.guests} {reservation.guests === 1 ? 'guest' : 'guests'}
+            </span>
+          </div>
+        )}
+
+        {interrupted && (
+          <p className="mt-3 text-sm text-muted-foreground">
+            {reservation.date} · {formatTime12h(reservation.time)} · {reservation.guests} {reservation.guests === 1 ? 'guest' : 'guests'}
+          </p>
+        )}
       </div>
 
       {/* Timeline */}
@@ -79,75 +85,54 @@ function ReservationCard({ reservation, onUpdate }) {
         <ReservationTimeline reservation={reservation} />
       </div>
 
-      {/* Reveal block — table number + section + time + guest count */}
+      {/* Premium table card — replaces status content once a table is assigned. */}
       {tableRevealed && tableLabel && (
-        <div className="p-6 border-b border-border bg-primary/5">
-          <p className="text-[10px] uppercase tracking-[0.3em] text-primary mb-3">
-            Your table
-          </p>
-          <div className="grid sm:grid-cols-4 gap-4">
-            <div>
-              <p className="text-xs text-muted-foreground mb-1">Table</p>
-              <p className="font-serif text-3xl text-primary">{tableLabel}</p>
-            </div>
-            {sectionLabel && (
+        <div className="p-6 border-b border-border bg-gradient-to-br from-primary/10 via-primary/5 to-transparent">
+          <p className="text-[10px] uppercase tracking-[0.4em] text-primary mb-4">Your Table</p>
+          <p className="font-serif text-4xl text-primary leading-none mb-5">Table {tableLabel}</p>
+          <div className="grid grid-cols-3 gap-4 pt-4 border-t border-primary/15">
+            {sectionLabel ? (
               <div>
-                <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1">
                   <MapPin className="h-3 w-3" /> Section
                 </p>
                 <p className="font-medium">{sectionLabel}</p>
               </div>
+            ) : (
+              <div />
             )}
             <div>
-              <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1">
                 <Clock className="h-3 w-3" /> Time
               </p>
-              <p className="font-medium">{reservation.time}</p>
+              <p className="font-medium">{formatTime12h(reservation.time)}</p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
-                <Users className="h-3 w-3" /> Party
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1">
+                <Users className="h-3 w-3" /> Guests
               </p>
               <p className="font-medium">
-                {reservation.guests} {reservation.guests === 1 ? 'guest' : 'guests'}
+                {reservation.guests} {reservation.guests === 1 ? 'Guest' : 'Guests'}
               </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* Footer — extra info */}
-      <div className="p-6 grid sm:grid-cols-2 gap-4 text-sm">
-        <div>
-          <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Seating preference</p>
-          <p>{reservation.seating_preference || 'No preference'}</p>
+      {/* Footer — only the reservation code + tracker link. */}
+      {reservation.reservation_code && (
+        <div className="p-4 px-6 flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Code <span className="font-mono text-foreground">{reservation.reservation_code}</span>
+          </p>
+          <Link
+            href={`/reservation/${reservation.reservation_code}`}
+            className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+          >
+            Open live tracker <ChevronRight className="h-3 w-3" />
+          </Link>
         </div>
-        <div>
-          <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Occasion</p>
-          <p>{reservation.occasion || 'Casual dining'}</p>
-        </div>
-        {(reservation.special_requests || reservation.notes) && (
-          <div className="sm:col-span-2">
-            <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Notes</p>
-            <p className="italic text-muted-foreground">
-              "{reservation.special_requests || reservation.notes}"
-            </p>
-          </div>
-        )}
-        {reservation.reservation_code && (
-          <div className="sm:col-span-2 pt-3 mt-1 border-t border-border/60 flex items-center justify-between gap-3 flex-wrap">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Code <span className="font-mono text-foreground">{reservation.reservation_code}</span>
-            </p>
-            <Link
-              href={`/reservation/${reservation.reservation_code}`}
-              className="text-xs text-primary hover:underline inline-flex items-center gap-1"
-            >
-              Open live tracker <ChevronRight className="h-3 w-3" />
-            </Link>
-          </div>
-        )}
-      </div>
+      )}
     </Card>
   )
 }
