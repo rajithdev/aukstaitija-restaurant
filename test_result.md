@@ -103,6 +103,161 @@
 #====================================================================================================
 
 user_problem_statement: |
+  Improve the Assign Table modal so manager can quickly decide whether a reserved/occupied
+  table can be used temporarily for walk-ins:
+  - Reserved tables must show reservation timing (absolute or relative).
+  - Occupied tables with a future reservation must show "Occupied now" + "Next reserved: HH:MM".
+  - Optionally show guest name.
+
+backend:
+  - task: "Enrich /api/reservations/:id/available-tables with upcoming_reservation and active_session"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            For each table returned by GET /api/reservations/:id/available-tables, the response
+            now includes:
+              * upcoming_reservation — the nearest future reservation assigned to that table
+                (excluding the reservation currently being assigned, only statuses
+                pending/confirmed/table_assigned, with a 30-min grace so just-started slots show).
+              * active_session — full active session object when table.status === 'occupied'.
+            The shape of `available` and `suggested` arrays is unchanged otherwise; new fields are
+            additive. Suggested still respects seating preference filtering. Endpoint still
+            requires admin token.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ PASS - All enrichment tests passed (17/17 - 100% success rate)
+            
+            **TEST RESULTS:**
+            
+            1. **AUTH CHECK (1/1):**
+               ✅ Returns 401 without x-admin-token header
+            
+            2. **RESPONSE SHAPE (4/4):**
+               ✅ Response has required top-level fields: available, suggested, seating_preference
+               ✅ Each table object has all required fields: id, number, capacity, section, status, upcoming_reservation, active_session
+               ✅ upcoming_reservation is null or has correct structure (date, time, status, guests, name)
+               ✅ active_session is null when table status != 'occupied'
+            
+            3. **UPCOMING RESERVATION POPULATED (2/2):**
+               ✅ Created reservation A with assigned table, then queried for reservation B
+               ✅ Table assigned to reservation A correctly shows upcoming_reservation with A's details (name, time)
+            
+            4. **EXCLUDES SELF (1/1):**
+               ✅ When querying available tables for a reservation with assigned table, that reservation does NOT appear as its own upcoming_reservation
+            
+            5. **EXCLUDES PAST RESERVATIONS (1/1):**
+               ✅ No upcoming_reservation entries found with date+time more than 30 minutes in the past
+            
+            6. **EXCLUDES NON-ACTIVE STATUSES (1/1):**
+               ✅ All upcoming_reservation entries have valid statuses (pending/confirmed/table_assigned only)
+               ✅ Cancelled, no_show, completed, arrived, checked_in statuses correctly excluded
+            
+            7. **ACTIVE SESSION ENRICHMENT (4/4):**
+               ✅ Created walk-in session to occupy a table
+               ✅ Occupied table correctly shows active_session object with id, table_id, started_at, session_status='active'
+               ✅ All non-occupied tables have null active_session
+               ✅ Session cleanup successful
+            
+            8. **REGRESSION CHECKS (3/3):**
+               ✅ seating_preference field present in response
+               ✅ suggested array is subset of available array
+               ✅ suggested tables correctly filtered by seating preference (Main Hall)
+            
+            **CRITICAL VERIFICATIONS:**
+            ✅ Authentication working (401 without admin token)
+            ✅ New fields are additive (no breaking changes to existing structure)
+            ✅ upcoming_reservation excludes the reservation being assigned (self-exclusion)
+            ✅ upcoming_reservation only includes active statuses (pending/confirmed/table_assigned)
+            ✅ Past reservations beyond 30-min grace period excluded
+            ✅ active_session populated only when table status is 'occupied'
+            ✅ active_session has correct structure with session_status='active'
+            ✅ Seating preference filtering still works correctly
+            ✅ suggested array remains subset of available array
+            
+            **TEST FILE:** /app/test_available_tables_enrichment.py
+            
+            All enrichment features are working correctly and ready for production. No issues found.
+
+frontend:
+  - task: "Show reservation timing in Assign Table modal"
+    implemented: true
+    working: "NA"
+    file: "components/ReservationDashboard.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Modal now shows a status-aware timing line under each table card:
+              * If table is occupied → "Occupied now"; if it also has an upcoming reservation,
+                shows "Next reserved: 8:00 PM · <guest name>".
+              * If table has an upcoming reservation today within 2h → "Reserved in 1h 20m · 8:00 PM",
+                otherwise "Reserved at 8:00 PM", with guest name (and party size) on the line below.
+              * Status badge updated to match: Available / Occupied / Reserved / Cleaning with
+                appropriate colors (was previously a binary green/amber).
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Enrich /api/reservations/:id/available-tables with upcoming_reservation and active_session"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Backend endpoint /api/reservations/:id/available-tables was extended to enrich each
+        returned table with upcoming_reservation and active_session. Please verify:
+          1. Endpoint still requires x-admin-token (401 without).
+          2. Each item in `available` includes the new fields (upcoming_reservation may be null,
+             active_session may be null).
+          3. upcoming_reservation excludes the reservation being assigned itself.
+          4. upcoming_reservation only includes pending / confirmed / table_assigned statuses.
+          5. Past reservations (>30 min in the past) are not surfaced.
+          6. active_session is non-null only when table.status === 'occupied'.
+          7. Existing fields (id, number, capacity, section, status) and seating-preference
+             based suggested[] filtering remain intact.
+    - agent: "testing"
+      message: |
+        ✅ BACKEND TESTING COMPLETE - Available-tables enrichment fully tested and working
+        
+        **TEST EXECUTION:**
+        - Created comprehensive test suite: /app/test_available_tables_enrichment.py
+        - Executed 17 test scenarios covering all enrichment features
+        - All tests passed (100% success rate)
+        
+        **VERIFIED FEATURES:**
+        ✅ Authentication: Returns 401 without x-admin-token
+        ✅ Response structure: available, suggested, seating_preference fields present
+        ✅ Table enrichment: All tables have upcoming_reservation and active_session fields
+        ✅ upcoming_reservation: Correctly populated with nearest future reservation
+        ✅ Self-exclusion: upcoming_reservation excludes the reservation being assigned
+        ✅ Status filtering: Only pending/confirmed/table_assigned statuses included
+        ✅ Past exclusion: Reservations >30 min in past correctly excluded
+        ✅ active_session: Populated only when table status is 'occupied'
+        ✅ Session structure: Contains id, table_id, started_at, session_status='active'
+        ✅ Regression: seating_preference filtering still works correctly
+        
+        **NO ISSUES FOUND:**
+        All enrichment features are working correctly. The endpoint is production-ready.
+
+user_problem_statement: |
   Build a complete restaurant operating system and customer-facing website for "Aukstaitija" — a
   Modern Lithuanian fine-dining restaurant in Kaunas. Phase 1 MVP: luxury homepage, dynamic menu
   with search/filters/dietary tags, dish detail page, cart, guest checkout (cash on delivery only),

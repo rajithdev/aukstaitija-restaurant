@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { 
   Calendar, Users, Clock, MapPin, DoorClosed, Home, Volume2, LogIn, Sparkles,
   Heart, Briefcase, Gift, UtensilsCrossed, Wine, PartyPopper, Check, X, 
-  UserCheck, Table as TableIcon, AlertCircle, ChevronRight, TrendingUp
+  UserCheck, Table as TableIcon, AlertCircle, ChevronRight, TrendingUp, CalendarClock
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -37,6 +37,39 @@ const STATUS_STYLES = {
   completed: { bg: 'bg-emerald-500/20', text: 'text-emerald-400', border: 'border-emerald-500/30', label: 'Completed' },
   cancelled: { bg: 'bg-zinc-500/20', text: 'text-zinc-500', border: 'border-zinc-500/30', label: 'Cancelled' },
   no_show: { bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30', label: 'No-show' },
+}
+
+// Convert "20:00" to "8:00 PM"
+function formatTime12h(timeStr) {
+  if (!timeStr) return ''
+  const [hStr, mStr] = timeStr.split(':')
+  const h = parseInt(hStr, 10)
+  const m = parseInt(mStr, 10) || 0
+  const period = h >= 12 ? 'PM' : 'AM'
+  const hour = h === 0 ? 12 : h > 12 ? h - 12 : h
+  return `${hour}:${m.toString().padStart(2, '0')} ${period}`
+}
+
+// Returns relative time string for an upcoming reservation, or null if past/today-irrelevant
+function relativeFromNow(date, time) {
+  if (!date || !time) return null
+  const target = new Date(`${date}T${time}:00`)
+  if (isNaN(target.getTime())) return null
+  const diffMs = target.getTime() - Date.now()
+  if (diffMs <= 0) return null
+  const totalMins = Math.round(diffMs / 60000)
+  if (totalMins < 60) return `${totalMins}m`
+  const h = Math.floor(totalMins / 60)
+  const m = totalMins % 60
+  if (m === 0) return `${h}h`
+  return `${h}h ${m}m`
+}
+
+// Returns true if the reservation date is today
+function isSameDay(dateStr) {
+  if (!dateStr) return false
+  const today = new Date().toISOString().split('T')[0]
+  return dateStr === today
 }
 
 function ReservationDashboard({ reservations = [], token, onUpdate }) {
@@ -382,34 +415,110 @@ function ReservationDashboard({ reservations = [], token, onUpdate }) {
             )}
 
             <div className="grid sm:grid-cols-2 gap-3">
-              {availableTables.map(table => (
-                <button
-                  key={table.id}
-                  onClick={() => assignTable(table.id)}
-                  className="p-4 bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-700 hover:border-amber-500/50 rounded-xl transition-all text-left group"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-lg font-semibold text-zinc-100">Table {table.number}</span>
-                    <span className={`text-xs px-2 py-1 rounded-full ${
-                      table.status === 'available' 
-                        ? 'bg-emerald-500/20 text-emerald-400' 
-                        : 'bg-amber-500/20 text-amber-400'
-                    }`}>
-                      {table.status}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-4 text-sm text-zinc-400">
-                    <span className="flex items-center gap-1">
-                      <Users className="h-3.5 w-3.5" />
-                      {table.capacity}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <MapPin className="h-3.5 w-3.5" />
-                      {table.section}
-                    </span>
-                  </div>
-                </button>
-              ))}
+              {availableTables.map(table => {
+                const upcoming = table.upcoming_reservation
+                const isOccupied = table.status === 'occupied'
+                const isReserved = table.status === 'reserved' || (!!upcoming && !isOccupied)
+
+                let badgeLabel = table.status
+                let badgeClass = 'bg-zinc-700/40 text-zinc-300'
+                if (table.status === 'available') {
+                  badgeLabel = 'Available'
+                  badgeClass = 'bg-emerald-500/20 text-emerald-400'
+                } else if (isOccupied) {
+                  badgeLabel = 'Occupied'
+                  badgeClass = 'bg-rose-500/20 text-rose-400'
+                } else if (isReserved) {
+                  badgeLabel = 'Reserved'
+                  badgeClass = 'bg-sky-500/20 text-sky-300'
+                } else if (table.status === 'cleaning') {
+                  badgeLabel = 'Cleaning'
+                  badgeClass = 'bg-amber-500/20 text-amber-400'
+                }
+
+                // Build reservation timing line
+                let timingLine = null
+                if (upcoming && (isSameDay(upcoming.date) || !isOccupied)) {
+                  const rel = isSameDay(upcoming.date) ? relativeFromNow(upcoming.date, upcoming.time) : null
+                  const absLabel = formatTime12h(upcoming.time)
+                  if (isOccupied) {
+                    timingLine = (
+                      <div className="mt-2 pt-2 border-t border-zinc-700/60 space-y-1">
+                        <div className="flex items-center gap-1.5 text-xs text-rose-300/90">
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />
+                          Occupied now
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs text-sky-300">
+                          <CalendarClock className="h-3.5 w-3.5" />
+                          Next reserved: <span className="font-medium">{absLabel}</span>
+                          {upcoming.name && (
+                            <span className="text-zinc-500 truncate">· {upcoming.name}</span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  } else {
+                    // Reserved (future)
+                    const showRel = rel && (() => {
+                      // Show relative when within ~2 hours
+                      const target = new Date(`${upcoming.date}T${upcoming.time}:00`)
+                      return (target.getTime() - Date.now()) <= 2 * 60 * 60 * 1000
+                    })()
+                    timingLine = (
+                      <div className="mt-2 pt-2 border-t border-zinc-700/60 space-y-1">
+                        <div className="flex items-center gap-1.5 text-xs text-sky-300">
+                          <CalendarClock className="h-3.5 w-3.5" />
+                          {showRel ? (
+                            <>Reserved in <span className="font-medium">{rel}</span> <span className="text-zinc-500">· {absLabel}</span></>
+                          ) : (
+                            <>Reserved at <span className="font-medium">{absLabel}</span></>
+                          )}
+                        </div>
+                        {upcoming.name && (
+                          <div className="text-[11px] text-zinc-500 pl-5 truncate">
+                            Guest: {upcoming.name}{upcoming.guests ? ` · ${upcoming.guests}p` : ''}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  }
+                } else if (isOccupied) {
+                  timingLine = (
+                    <div className="mt-2 pt-2 border-t border-zinc-700/60">
+                      <div className="flex items-center gap-1.5 text-xs text-rose-300/90">
+                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" />
+                        Occupied now
+                      </div>
+                    </div>
+                  )
+                }
+
+                return (
+                  <button
+                    key={table.id}
+                    onClick={() => assignTable(table.id)}
+                    className="p-4 bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-700 hover:border-amber-500/50 rounded-xl transition-all text-left group"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-lg font-semibold text-zinc-100">Table {table.number}</span>
+                      <span className={`text-xs px-2 py-1 rounded-full ${badgeClass}`}>
+                        {badgeLabel}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-4 text-sm text-zinc-400">
+                      <span className="flex items-center gap-1">
+                        <Users className="h-3.5 w-3.5" />
+                        {table.capacity}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <MapPin className="h-3.5 w-3.5" />
+                        {table.section}
+                      </span>
+                    </div>
+                    {timingLine}
+                  </button>
+                )
+              })}
             </div>
           </Card>
         </div>

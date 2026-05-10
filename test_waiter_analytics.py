@@ -11,7 +11,7 @@ import os
 from datetime import datetime
 
 # Configuration - use environment variable for base URL
-BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://reservation-alerts.preview.emergentagent.com') + '/api'
+BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://table-reserve-timing.preview.emergentagent.com') + '/api'
 ADMIN_TOKEN = "admin123"
 
 def log_test(test_name, passed, details=""):

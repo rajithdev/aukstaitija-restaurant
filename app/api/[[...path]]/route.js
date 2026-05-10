@@ -1064,17 +1064,54 @@ async function handleRoute(request, { params }) {
       
       const blockedTableIds = new Set(conflictingReservations.map(r => r.table_id))
       const availableTables = allTables.filter(t => !blockedTableIds.has(t.id))
-      
+
+      // Enrich each table with its nearest upcoming reservation (other than the
+      // one being assigned) plus the active session (when occupied) so the
+      // manager can see timing context in the assignment modal.
+      const tableIds = availableTables.map(t => t.id)
+      const upcomingForTables = await db.collection('reservations').find({
+        id: { $ne: reservation.id },
+        table_id: { $in: tableIds },
+        status: { $in: ['pending', 'confirmed', 'table_assigned'] },
+      }).toArray()
+
+      const nowTs = new Date()
+      const nearestByTable = {}
+      for (const r of upcomingForTables) {
+        const dt = new Date(`${r.date}T${r.time}:00`)
+        // Skip past reservations (allow a 30-min grace so just-started slots still surface)
+        if (dt.getTime() + 30 * 60 * 1000 < nowTs.getTime()) continue
+        const existing = nearestByTable[r.table_id]
+        if (!existing || dt < new Date(`${existing.date}T${existing.time}:00`)) {
+          nearestByTable[r.table_id] = r
+        }
+      }
+
+      const enriched = []
+      for (const t of availableTables) {
+        const upcoming = nearestByTable[t.id] || null
+        let activeSession = null
+        if (t.status === 'occupied') {
+          const s = await getActiveSession(db, t.id)
+          if (s) activeSession = stripId(s)
+        }
+        enriched.push({
+          ...stripId(t),
+          upcoming_reservation: upcoming ? stripId(upcoming) : null,
+          active_session: activeSession,
+        })
+      }
+
       // Suggest tables based on seating preference
-      const suggested = availableTables.filter(t => 
-        reservation.seating_preference === 'No preference' || 
+      const suggested = enriched.filter(t =>
+        reservation.seating_preference === 'No preference' ||
         t.section?.toLowerCase().includes(reservation.seating_preference?.toLowerCase()) ||
         reservation.seating_preference?.toLowerCase().includes(t.section?.toLowerCase())
       )
-      
+
       return handleCORS(NextResponse.json({
-        available: availableTables.map(stripId),
-        suggested: suggested.map(stripId),
+        available: enriched,
+        suggested,
         seating_preference: reservation.seating_preference
       }))
     }

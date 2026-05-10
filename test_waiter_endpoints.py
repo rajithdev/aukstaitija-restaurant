@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 
 # Configuration
-BASE_URL = "https://reservation-alerts.preview.emergentagent.com/api"
+BASE_URL = "https://table-reserve-timing.preview.emergentagent.com/api"
 ADMIN_TOKEN = "admin123"
 ADMIN_HEADERS = {"x-admin-token": ADMIN_TOKEN}
 
