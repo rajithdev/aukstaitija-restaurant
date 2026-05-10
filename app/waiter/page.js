@@ -104,6 +104,7 @@ function WaiterPage() {
   const [token, setToken] = useState('')
   const [pwd, setPwd] = useState('')
   const [notifs, setNotifs] = useState([])
+  const [guestRequests, setGuestRequests] = useState([])
   const [now, setNow] = useState(Date.now())
   const [audioOn, setAudioOn] = useState(true)
   const prevPendingIdsRef = useRef(new Set())
@@ -167,11 +168,35 @@ function WaiterPage() {
     setNotifs(data)
   }
 
+  const fetchGuestRequests = async (tk = token) => {
+    if (!tk) return
+    const res = await fetch('/api/guest-requests', { headers: { 'x-admin-token': tk } })
+    if (res.ok) {
+      const data = await res.json()
+      setGuestRequests(Array.isArray(data) ? data : [])
+    }
+  }
+
+  const resolveRequest = async (id) => {
+    const res = await fetch(`/api/guest-requests/${id}`, {
+      method: 'PATCH',
+      headers: { 'x-admin-token': token },
+    })
+    if (res.ok) {
+      toast.success('Request resolved')
+      fetchGuestRequests()
+    }
+  }
+
   // Auto-refresh every 3 seconds per spec.
   useEffect(() => {
     if (!token) return
     fetchNotifs(token)
-    const i = setInterval(() => fetchNotifs(token), 3000)
+    fetchGuestRequests(token)
+    const i = setInterval(() => {
+      fetchNotifs(token)
+      fetchGuestRequests(token)
+    }, 3000)
     return () => clearInterval(i)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
@@ -304,6 +329,83 @@ function WaiterPage() {
             </p>
           </div>
         </div>
+
+        {/* Guest Requests Section */}
+        {guestRequests.length > 0 && (
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-5 px-1">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-amber-400/15 ring-1 ring-amber-400/30 flex items-center justify-center">
+                  <Bell className="h-5 w-5 text-amber-300" />
+                </div>
+                <div>
+                  <h2 className="font-serif text-3xl text-zinc-50 tracking-tight leading-none">Guest Requests</h2>
+                  <p className="text-[11px] uppercase tracking-[0.3em] text-zinc-500 mt-1">Assistance needed</p>
+                </div>
+              </div>
+              <span className="font-mono text-4xl tabular-nums text-amber-300">{String(guestRequests.length).padStart(2, '0')}</span>
+            </div>
+            
+            <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {guestRequests.map(req => {
+                const createdMs = now - new Date(req.created_at).getTime()
+                const requestTypeLabels = {
+                  waiter: 'Request Waiter',
+                  water: 'Need Water',
+                  bill: 'Request Bill',
+                  allergy: 'Allergy Assistance',
+                  other: 'Other Help',
+                }
+                const requestTypeColors = {
+                  waiter: 'bg-amber-500/10 border-amber-500/30 text-amber-300',
+                  water: 'bg-blue-500/10 border-blue-500/30 text-blue-300',
+                  bill: 'bg-purple-500/10 border-purple-500/30 text-purple-300',
+                  allergy: 'bg-red-500/10 border-red-500/30 text-red-300',
+                  other: 'bg-zinc-500/10 border-zinc-500/30 text-zinc-300',
+                }
+                
+                return (
+                  <div key={req.id} className={`relative overflow-hidden rounded-2xl bg-zinc-950/70 backdrop-blur-xl ring-1 ring-amber-400/40 shadow-[0_0_32px_-10px_rgba(212,165,74,0.4)] transition-all hover:-translate-y-0.5`}>
+                    <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/80 to-transparent" />
+                    <div className="p-5">
+                      <div className="flex items-start justify-between mb-3 gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="bg-gradient-to-b from-amber-300 to-amber-500 text-zinc-950 px-4 py-1.5 rounded-md font-bold tracking-wide text-lg shadow-lg shadow-amber-500/30">
+                              Table {req.table_number || '?'}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider uppercase border ${requestTypeColors[req.request_type] || requestTypeColors.other}`}>
+                              {requestTypeLabels[req.request_type] || req.request_type}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="flex items-center justify-end gap-1.5 font-mono text-xl tabular-nums text-amber-300">
+                            <Clock className="h-4 w-4 opacity-70" /> {formatElapsed(createdMs)}
+                          </div>
+                          <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-0.5">ago</p>
+                        </div>
+                      </div>
+
+                      {req.note && (
+                        <div className="mb-3 px-3 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-sm text-zinc-100 italic">
+                          "{req.note}"
+                        </div>
+                      )}
+
+                      <Button
+                        onClick={() => resolveRequest(req.id)}
+                        className="w-full h-12 text-base font-semibold bg-gradient-to-b from-emerald-500 to-emerald-700 hover:from-emerald-400 hover:to-emerald-600 text-white shadow-lg shadow-emerald-500/30 border-0"
+                      >
+                        <CheckCircle2 className="h-5 w-5 mr-2" /> Mark Resolved
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Single column - Ready to Serve */}
         <div>

@@ -1,8 +1,10 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
+import RequestWaiterButton from '@/components/RequestWaiterButton'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -11,7 +13,8 @@ import { Search, Plus, Flame, Leaf, WheatOff, Beef, Star, Clock, Heart } from 'l
 import { toast } from 'sonner'
 
 function MenuPage() {
-  const { t, lang, addToCart, tableId, tableNumber, user, toggleFavorite } = useApp()
+  const searchParams = useSearchParams()
+  const { t, lang, addToCart, tableId, tableNumber, setTableId, user, toggleFavorite } = useApp()
   const [dishes, setDishes] = useState([])
   const [categories, setCategories] = useState([])
   const [search, setSearch] = useState('')
@@ -19,6 +22,17 @@ function MenuPage() {
   const [dietary, setDietary] = useState('all')
   const [sort, setSort] = useState('popular')
   const [loading, setLoading] = useState(true)
+
+  // Handle table parameter from QR code
+  useEffect(() => {
+    const tableParam = searchParams.get('table')
+    if (tableParam && tableParam !== tableId) {
+      // Extract table number from ID (e.g., "t4" -> 4)
+      const tableNum = tableParam.replace(/^t/, '')
+      setTableId(tableParam, parseInt(tableNum))
+      toast.success(`Seated at Table ${tableNum}`)
+    }
+  }, [searchParams, tableId, setTableId])
 
   useEffect(() => {
     fetch('/api/categories').then(r => r.json()).then(d => setCategories(Array.isArray(d) ? d : []))
@@ -154,6 +168,7 @@ function MenuPage() {
       </section>
 
       <Footer />
+      <RequestWaiterButton />
     </div>
   )
 }
