@@ -9,7 +9,7 @@ import json
 from datetime import datetime, timedelta
 
 # Configuration
-BASE_URL = "https://dine-in-plus.preview.emergentagent.com/api"
+BASE_URL = "https://reservation-alerts.preview.emergentagent.com/api"
 ADMIN_TOKEN = "admin123"
 HEADERS = {"Content-Type": "application/json"}
 ADMIN_HEADERS = {"Content-Type": "application/json", "x-admin-token": ADMIN_TOKEN}
