@@ -29,47 +29,33 @@ export default function WaiterTablePanel() {
 
   const fetchTableSession = async (tk) => {
     try {
-      // Fetch table info
-      const tableRes = await fetch(`/api/tables/${params.tableId}`, {
+      // Single source of truth: GET /api/tables/:id/bill
+      // Returns { table, session, orders (all unpaid dine-in orders for the
+      // active session/table — any kitchen status), totals, debug }.
+      const billRes = await fetch(`/api/tables/${params.tableId}/bill`, {
         headers: { 'x-admin-token': tk }
       })
-      if (tableRes.ok) {
-        const tableData = await tableRes.json()
-        setTable(tableData)
-        console.log('✅ Table data:', tableData)
+      if (!billRes.ok) {
+        const errText = await billRes.text().catch(() => '')
+        console.error(`❌ Bill fetch failed: HTTP ${billRes.status} — ${errText}`)
+        toast.error('Failed to load table bill')
+        return
       }
+      const bill = await billRes.json()
+      setTable(bill.table || null)
+      setSession(bill.session || null)
+      setOrders(Array.isArray(bill.orders) ? bill.orders : [])
 
-      // Fetch active session
-      const sessionRes = await fetch(`/api/tables/${params.tableId}/session`, {
-        headers: { 'x-admin-token': tk }
-      })
-      if (sessionRes.ok) {
-        const sessionData = await sessionRes.json()
-        setSession(sessionData)
-        console.log('✅ Session data:', sessionData)
-      }
-
-      // Fetch ALL orders for this table (not just specific statuses)
-      // Include: pending, confirmed, preparing, ready, served
-      const ordersRes = await fetch(`/api/orders?table_id=${params.tableId}`, {
-        headers: { 'x-admin-token': tk }
-      })
-      if (ordersRes.ok) {
-        const ordersData = await ordersRes.json()
-        // Filter to only unpaid orders with relevant statuses
-        const activeOrders = Array.isArray(ordersData) 
-          ? ordersData.filter(o => 
-              o.payment_status !== 'paid' && 
-              ['pending', 'confirmed', 'preparing', 'ready', 'served'].includes(o.status)
-            )
-          : []
-        setOrders(activeOrders)
-        console.log(`✅ Fetched ${activeOrders.length} active unpaid orders for table ${params.tableId}`)
-        console.log('Orders:', activeOrders)
-      }
+      // Debug logging — exactly as required by the bill-fix spec
+      console.log('🧾 [Bill] table_id:', bill.debug?.table_id)
+      console.log('🧾 [Bill] active_session_id:', bill.debug?.active_session_id)
+      console.log('🧾 [Bill] fetched order count:', bill.debug?.fetched_count)
+      console.log('🧾 [Bill] fetched statuses:', bill.debug?.statuses)
+      console.log('🧾 [Bill] payment statuses:', bill.debug?.payment_statuses)
+      console.log('🧾 [Bill] unpaid totals:', bill.debug?.unpaid_totals)
     } catch (e) {
-      console.error('❌ Error fetching table session:', e)
-      toast.error('Failed to load table session')
+      console.error('❌ Error fetching table bill:', e)
+      toast.error('Failed to load table bill')
     } finally {
       setLoading(false)
     }
@@ -83,13 +69,19 @@ export default function WaiterTablePanel() {
         method: 'POST',
         headers: { 'x-admin-token': token },
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
-        toast.success('Payment completed! Table is now available.')
+        console.log('✅ [complete-payment]', data)
+        toast.success(
+          `Payment completed — €${(data.paid_total ?? 0).toFixed(2)} · ${data.orders_closed ?? 0} order(s) closed. Table is now available.`
+        )
         router.push('/waiter')
       } else {
-        toast.error('Failed to complete payment')
+        console.error('❌ [complete-payment] failed:', data)
+        toast.error(data?.error || 'Failed to complete payment')
       }
     } catch (e) {
+      console.error('❌ [complete-payment] exception:', e)
       toast.error('Failed to complete payment')
     } finally {
       setClosing(false)

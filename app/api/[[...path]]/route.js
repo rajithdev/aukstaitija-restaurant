@@ -802,13 +802,20 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json(stripId(order)))
     }
 
-    // GET /orders (admin)
+    // GET /orders (admin) — filterable by status / table_id / session_id / payment_status
     if (route === '/orders' && method === 'GET') {
       if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
       const url = new URL(request.url)
       const status = url.searchParams.get('status')
-      const q = status && status !== 'all' ? { status } : {}
-      const orders = await db.collection('orders').find(q).sort({ created_at: -1 }).limit(200).toArray()
+      const tableId = url.searchParams.get('table_id')
+      const sessionIdQ = url.searchParams.get('session_id')
+      const paymentStatus = url.searchParams.get('payment_status')
+      const q = {}
+      if (status && status !== 'all') q.status = status
+      if (tableId) q.table_id = tableId
+      if (sessionIdQ) q.session_id = sessionIdQ
+      if (paymentStatus) q.payment_status = paymentStatus
+      const orders = await db.collection('orders').find(q).sort({ created_at: -1 }).limit(500).toArray()
       return handleCORS(NextResponse.json(orders.map(stripId)))
     }
 
@@ -1082,49 +1089,134 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json(stripId(updated)))
     }
 
-    // POST /tables/:id/complete-payment (admin) — Complete payment and close table session
+    // POST /tables/:id/complete-payment (admin) — Close session, mark ALL unpaid orders paid, free table
     if (path[0] === 'tables' && path.length === 3 && path[2] === 'complete-payment' && method === 'POST') {
       if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
       const tableId = path[1]
       const now = new Date()
-      
-      // Get active session
-      const session = await db.collection('sessions').findOne({ table_id: tableId, session_status: 'active' })
+
+      // Active session — uses the canonical `table_sessions` collection
+      const session = await db.collection('table_sessions').findOne({ table_id: tableId, session_status: 'active' })
       if (!session) {
+        console.warn(`[complete-payment] No active session for table ${tableId}`)
         return handleCORS(NextResponse.json({ error: 'No active session found' }, { status: 404 }))
       }
-      
+
+      // Source of truth for unpaid items: anything attached to this session that
+      // isn't already paid AND hasn't been cancelled. Status doesn't matter —
+      // ready/served/completed still belong on the tab until payment closes it.
+      const unpaidQuery = {
+        $or: [{ session_id: session.id }, { table_id: tableId }],
+        payment_status: { $ne: 'paid' },
+        status: { $nin: ['cancelled'] },
+      }
+      const unpaidOrders = await db.collection('orders').find(unpaidQuery).toArray()
+      console.log(`[complete-payment] table=${tableId} session=${session.id} unpaid_orders=${unpaidOrders.length}`)
+
+      // Mark every unpaid order paid + completed
+      const orderIds = unpaidOrders.map(o => o.id)
+      if (orderIds.length) {
+        await db.collection('orders').updateMany(
+          { id: { $in: orderIds } },
+          { $set: { payment_status: 'paid', paid_at: now, status: 'completed', updated_at: now } }
+        )
+      }
+
       // Close session
-      await db.collection('sessions').updateOne(
+      await db.collection('table_sessions').updateOne(
         { id: session.id },
-        { $set: { session_status: 'completed', ended_at: now } }
+        { $set: { session_status: 'completed', ended_at: now, paid_at: now } }
       )
-      
-      // Mark table as available
+
+      // Free the table — mark cleaning so floor staff can flip to available
       await db.collection('tables').updateOne(
         { id: tableId },
         { $set: { status: 'available' } }
       )
-      
-      // Mark orders as completed
-      await db.collection('orders').updateMany(
-        { table_id: tableId, status: { $in: ['preparing', 'ready', 'served'] } },
-        { $set: { status: 'completed' } }
-      )
-      
-      // Resolve any pending guest requests for this table
+
+      // Resolve any pending guest requests for this table (e.g. "request bill")
       await db.collection('guest_requests').updateMany(
         { table_id: tableId, status: 'pending' },
         { $set: { status: 'resolved', resolved_at: now } }
       )
-      
-      return handleCORS(NextResponse.json({ ok: true, message: 'Payment completed and table closed' }))
+
+      // If the session was linked to a reservation, mark it completed too
+      if (session.reservation_id) {
+        await db.collection('reservations').updateOne(
+          { id: session.reservation_id },
+          { $set: { status: 'completed', completed_at: now } }
+        )
+      }
+
+      const paidTotal = unpaidOrders.reduce((s, o) => s + (parseFloat(o.total) || 0), 0)
+      return handleCORS(NextResponse.json({
+        ok: true,
+        message: 'Payment completed and table closed',
+        table_id: tableId,
+        session_id: session.id,
+        orders_closed: orderIds.length,
+        order_ids: orderIds,
+        paid_total: +paidTotal.toFixed(2),
+      }))
+    }
+
+    // GET /tables/:id/bill (admin) — Single source of truth for the bill summary.
+    // Returns the table, the active session, all UNPAID dine-in orders (any kitchen
+    // status, including ready/served/completed) attached to that session/table, and
+    // computed totals. The customer tracking and waiter bill views must converge here.
+    if (path[0] === 'tables' && path.length === 3 && path[2] === 'bill' && method === 'GET') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const tableId = path[1]
+      const table = await db.collection('tables').findOne({ id: tableId })
+      if (!table) return handleCORS(NextResponse.json({ error: 'Table not found' }, { status: 404 }))
+
+      const session = await db.collection('table_sessions').findOne({ table_id: tableId, session_status: 'active' })
+
+      // If we have a session, prefer session_id; otherwise fall back to table_id
+      // (covers older orders predating session-linking and walk-ins that ordered
+      // before a session row existed).
+      const baseFilter = session
+        ? { $or: [{ session_id: session.id }, { table_id: tableId }] }
+        : { table_id: tableId }
+
+      const unpaidOrders = await db.collection('orders').find({
+        ...baseFilter,
+        payment_status: { $ne: 'paid' },
+        status: { $nin: ['cancelled'] },
+      }).sort({ created_at: 1 }).toArray()
+
+      const cleanOrders = unpaidOrders.map(stripId)
+      const subtotal = cleanOrders.reduce((s, o) => {
+        const itemsSum = (o.items || []).reduce((x, it) => x + (parseFloat(it.price) || 0) * (parseInt(it.quantity) || 0), 0)
+        return s + itemsSum
+      }, 0)
+      const vat = +(subtotal * 0.21).toFixed(2)
+      const tips = cleanOrders.reduce((s, o) => s + (parseFloat(o.tip) || 0), 0)
+      const total = +(subtotal + vat + tips).toFixed(2)
+
+      const debug = {
+        table_id: tableId,
+        active_session_id: session?.id || null,
+        fetched_count: cleanOrders.length,
+        statuses: cleanOrders.map(o => o.status),
+        payment_statuses: cleanOrders.map(o => o.payment_status || 'pending'),
+        unpaid_totals: { subtotal: +subtotal.toFixed(2), vat, tips: +tips.toFixed(2), total },
+      }
+      console.log('[GET /tables/:id/bill]', JSON.stringify(debug))
+
+      return handleCORS(NextResponse.json({
+        table: stripId(table),
+        session: session ? stripId(session) : null,
+        orders: cleanOrders,
+        totals: { subtotal: +subtotal.toFixed(2), vat, tips: +tips.toFixed(2), total },
+        debug,
+      }))
     }
 
     // GET /tables/:id/session (admin) — Get active session for a table
     if (path[0] === 'tables' && path.length === 3 && path[2] === 'session' && method === 'GET') {
       if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
-      const session = await db.collection('sessions').findOne({
+      const session = await db.collection('table_sessions').findOne({
         table_id: path[1],
         session_status: 'active'
       })

@@ -1063,15 +1063,153 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 2
-  run_ui: true
+  test_sequence: 3
+  run_ui: false
 
 test_plan:
   current_focus:
-    - "Show reservation timing in Assign Table modal"
+    - "Waiter bill summary endpoint + complete-payment fix"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+backend:
+  - task: "Waiter bill summary endpoint + complete-payment fix"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            CRITICAL BUG FIX — Waiter bill summary was showing "No active orders" / €0
+            even when unpaid dine-in customer orders existed for the table.
+
+            Root causes fixed in app/api/[[...path]]/route.js:
+
+            (1) GET /api/orders ignored ?table_id= query param entirely. It now honors
+                table_id, session_id, and payment_status filters, and the row cap is
+                raised to 500. (Old `q = status ? {status} : {}` discarded everything else.)
+
+            (2) POST /api/tables/:id/complete-payment and GET /api/tables/:id/session
+                were querying the wrong MongoDB collection ('sessions') — the rest of
+                the codebase uses 'table_sessions'. Fixed to 'table_sessions' so the
+                session is actually found.
+
+            (3) POST /api/tables/:id/complete-payment now:
+                - Finds the active session in 'table_sessions'
+                - Locates ALL unpaid dine-in orders for that session (and falls back to
+                  table_id for legacy/walk-in orders that predate session linking)
+                - Marks every one of them payment_status='paid', status='completed',
+                  paid_at=now
+                - Closes the session (session_status='completed', ended_at, paid_at)
+                - Frees the table (status='available')
+                - Resolves any pending guest requests for that table
+                - If session was linked to a reservation, marks the reservation completed
+                - Returns { ok, table_id, session_id, orders_closed, order_ids, paid_total }
+
+            (4) NEW endpoint GET /api/tables/:id/bill (admin) — single source of truth
+                for the bill. Returns { table, session, orders, totals, debug } where:
+                - orders = all UNPAID dine-in orders attached to the active session
+                  (or table_id when no session row exists yet), regardless of kitchen
+                  status (received/preparing/ready/served/completed all show on the tab
+                  until payment).
+                - totals = { subtotal, vat, tips, total } computed server-side using
+                  21% VAT and per-order item totals.
+                - debug = { table_id, active_session_id, fetched_count, statuses,
+                  payment_statuses, unpaid_totals } — also logged server-side.
+
+            Frontend (/app/app/waiter/table/[tableId]/page.js) now fetches this single
+            endpoint instead of doing three separate fetches + buggy client-side
+            status filtering. Status filter no longer drops 'received' / 'completed'
+            orders (they belong on the tab until payment closes them).
+
+            Expected behavior after fix — please verify:
+              - Customer places order on Table 7 via QR → status 'received'.
+              - Waiter opens /waiter/table/t7 → bill page shows that order with its
+                items, line totals, and correct subtotal/VAT/total.
+              - Kitchen moves status to preparing → ready → served. Order STILL on the
+                bill.
+              - 'Payment Completed' is pressed → all orders marked paid+completed,
+                session closed, table freed. /waiter/table/t7 will return 404 session
+                on next fetch (or empty orders array).
+              - Re-opening order tracking for the old order shows payment_status='paid'
+                and status='completed' (customer-side consistency preserved).
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ PASS - All waiter bill summary tests passed (100% success rate)
+            
+            **TEST EXECUTION:**
+            - Created comprehensive test suite: /app/backend_test_bill_summary.py
+            - Executed complete end-to-end validation covering all scenarios from review request
+            - All critical bug fixes verified and working correctly
+            
+            **TEST RESULTS:**
+            
+            A. GET /api/orders filter regression (7/7):
+               ✅ GET /api/orders with admin token returns list (≤500 rows)
+               ✅ ?status=received filters correctly (only received orders)
+               ✅ ?table_id=<id> filters correctly (only orders for that table)
+               ✅ ?session_id=<id> filters correctly (only orders for that session)
+               ✅ ?payment_status=paid filters correctly (only paid orders)
+               ✅ Combined filters work (?table_id=X&status=received)
+               ✅ Without admin token returns 401
+            
+            B. GET /api/tables/:id/bill — NEW endpoint (15/15):
+               ✅ Without admin token returns 401
+               ✅ Non-existent table returns 404
+               ✅ Full bill flow: table + session + orders + totals + debug structure correct
+               ✅ Bill shows correct calculations: subtotal €28, VAT €5.88, total €33.88
+               ✅ Persistence: Order stays on bill through status changes (preparing → ready → served)
+               ✅ Order remains on bill even after status='delivered' when payment_status='pending'
+               ✅ Adding second order: Bill reflects combined unpaid items/totals
+               ✅ Custom order keys: UUID id and order_number with AK prefix working
+               ✅ Order lookup by order_number is case-insensitive (uppercase/lowercase both work)
+               ✅ Debug fields populated correctly: table_id, active_session_id, fetched_count, statuses, payment_statuses, unpaid_totals
+            
+            C. POST /api/tables/:id/complete-payment — fix verification (8/8):
+               ✅ Without admin token returns 401
+               ✅ Table with no active session returns 404 with 'No active session found' error
+               ✅ Response structure correct: ok=true, table_id, session_id, orders_closed, order_ids, paid_total
+               ✅ All unpaid orders marked: payment_status='paid', status='completed', paid_at set
+               ✅ Session closed: GET /api/tables/:id/session returns null
+               ✅ Table freed: status='available'
+               ✅ Bill after payment: session=null, orders=[], total=0
+               ✅ Payment total matches sum of unpaid orders
+            
+            D. End-to-end persistent-tab flow (7/7):
+               ✅ Customer scans QR: POST /api/tables/:id/start-session creates session
+               ✅ Customer places order: POST /api/orders with table_id
+               ✅ Kitchen marks ready: PUT status='ready'
+               ✅ Waiter opens bill: GET /api/tables/:id/bill shows order
+               ✅ Waiter completes payment: POST /api/tables/:id/complete-payment succeeds
+               ✅ Verification: session closed, orders paid+completed, table available
+               ✅ Re-fetching bill returns null session + empty orders
+            
+            E. Customer side same-source consistency (2/2):
+               ✅ GET /api/orders/:order_number (no auth) returns order
+               ✅ After complete-payment: customer view shows payment_status='paid', status='completed'
+            
+            **CRITICAL VERIFICATIONS:**
+            ✅ GET /api/orders now honors table_id, session_id, and payment_status filters (BUG FIX #1)
+            ✅ POST /api/tables/:id/complete-payment uses correct 'table_sessions' collection (BUG FIX #2)
+            ✅ GET /api/tables/:id/session uses correct 'table_sessions' collection (BUG FIX #2)
+            ✅ POST /api/tables/:id/complete-payment marks ALL unpaid orders as paid+completed (BUG FIX #3)
+            ✅ GET /api/tables/:id/bill returns all UNPAID orders regardless of kitchen status (BUG FIX #4)
+            ✅ Orders persist on bill through all kitchen status changes until payment
+            ✅ Debug log structure matches specification
+            ✅ Customer tracking consistency maintained (same payment_status visible to customer)
+            ✅ Order lookup by order_number is case-insensitive
+            ✅ Session lifecycle correct: create → active → completed
+            ✅ Table lifecycle correct: available → occupied → available
+            
+            **TEST FILE:** /app/backend_test_bill_summary.py
+            
+            All waiter bill summary bug fixes are working correctly and ready for production. The persistent-tab flow works end-to-end with no issues. Customer and waiter views are consistent.
 
 agent_communication:
     - agent: "main"
@@ -1110,6 +1248,61 @@ agent_communication:
         
         **NO ISSUES FOUND:**
         All enrichment features are working correctly. The endpoint is production-ready.
+    - agent: "main"
+      message: |
+        CRITICAL BUG FIX — Waiter bill summary endpoint + complete-payment fix.
+        
+        Three concrete bugs were fixed in /app/app/api/[[...path]]/route.js:
+        
+        (1) GET /api/orders now honors table_id, session_id, and payment_status query filters
+        (2) POST /api/tables/:id/complete-payment and GET /api/tables/:id/session now use 
+            correct 'table_sessions' collection (was 'sessions')
+        (3) POST /api/tables/:id/complete-payment now marks ALL unpaid orders as paid+completed
+        (4) NEW endpoint GET /api/tables/:id/bill returns all UNPAID orders regardless of 
+            kitchen status (received/preparing/ready/served/completed all show until payment)
+        
+        Please validate the full end-to-end flow:
+        - GET /api/orders filter regression (table_id, session_id, payment_status)
+        - GET /api/tables/:id/bill structure and calculations
+        - POST /api/tables/:id/complete-payment closes session, marks orders paid, frees table
+        - Orders persist on bill through all kitchen status changes until payment
+        - Customer tracking consistency (same payment_status visible to customer)
+    - agent: "testing"
+      message: |
+        ✅ BACKEND TESTING COMPLETE - Waiter bill summary bug fixes fully tested and working
+        
+        **TEST EXECUTION:**
+        - Created comprehensive test suite: /app/backend_test_bill_summary.py
+        - Executed complete end-to-end validation covering all scenarios from review request
+        - All critical bug fixes verified and working correctly (100% success rate)
+        
+        **VERIFIED BUG FIXES:**
+        ✅ BUG FIX #1: GET /api/orders now honors table_id, session_id, and payment_status filters
+        ✅ BUG FIX #2: POST /api/tables/:id/complete-payment uses correct 'table_sessions' collection
+        ✅ BUG FIX #2: GET /api/tables/:id/session uses correct 'table_sessions' collection
+        ✅ BUG FIX #3: POST /api/tables/:id/complete-payment marks ALL unpaid orders as paid+completed
+        ✅ BUG FIX #4: GET /api/tables/:id/bill returns all UNPAID orders regardless of kitchen status
+        
+        **TEST COVERAGE:**
+        A. GET /api/orders filter regression (7/7 tests passed)
+        B. GET /api/tables/:id/bill — NEW endpoint (15/15 tests passed)
+        C. POST /api/tables/:id/complete-payment (8/8 tests passed)
+        D. End-to-end persistent-tab flow (7/7 tests passed)
+        E. Customer side same-source consistency (2/2 tests passed)
+        
+        **CRITICAL VERIFICATIONS:**
+        ✅ Orders persist on bill through all kitchen status changes (preparing → ready → served)
+        ✅ Orders remain on bill even after status='delivered' when payment_status='pending'
+        ✅ Bill calculations correct: subtotal, VAT (21%), total
+        ✅ Debug log structure matches specification
+        ✅ Customer tracking consistency maintained
+        ✅ Order lookup by order_number is case-insensitive
+        ✅ Session lifecycle: create → active → completed
+        ✅ Table lifecycle: available → occupied → available
+        
+        **NO ISSUES FOUND:**
+        All waiter bill summary bug fixes are working correctly and ready for production. The 
+        persistent-tab flow works end-to-end with no issues. Customer and waiter views are consistent.
 
 user_problem_statement: |
   Build a complete restaurant operating system and customer-facing website for "Aukstaitija" — a
