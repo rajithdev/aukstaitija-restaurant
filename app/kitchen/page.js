@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label'
 import {
   ChefHat, Truck, ShoppingBag, Utensils, Clock, Bell, BellOff, LogOut,
   ArrowLeft, Volume2, Flame, CheckCircle2, PackageCheck, Bike,
-  LayoutGrid, Inbox, Soup, Settings, History, Activity,
+  LayoutGrid, Inbox, Soup, Settings, History, Activity, MoreVertical, XCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import DispatchModal from '@/components/DispatchModal'
@@ -36,51 +36,86 @@ const Pill = ({ children, className = '' }) => (
   </span>
 )
 
+// ── Tiny overflow menu (hover/click reveal) ─────────────────────────────────
+function OverflowMenu({ children, label = 'More' }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="h-11 w-11 rounded-md bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-zinc-400 hover:text-zinc-200 flex items-center justify-center transition"
+        title={label}
+        aria-label={label}
+      >
+        <MoreVertical className="h-4 w-4" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-[calc(100%+4px)] z-20 min-w-[180px] rounded-xl bg-zinc-900 border border-white/10 shadow-xl py-1.5 text-sm">
+          {typeof children === 'function' ? children(() => setOpen(false)) : children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const OverflowItem = ({ onClick, children, danger }) => (
+  <button
+    onClick={onClick}
+    className={`w-full text-left px-3.5 py-2 flex items-center gap-2 hover:bg-white/5 transition ${danger ? 'text-red-300 hover:text-red-200' : 'text-zinc-200'}`}
+  >
+    {children}
+  </button>
+)
+
 // ── Order card ──────────────────────────────────────────────────────────────
-// One unified card that adapts its accent + actions to the column it lives in.
+// Streamlined 2-action workflow:
+//   received → "Start Cooking"     (overflow: priority, reject)
+//   preparing → "Ready"            (overflow: priority, call courier for delivery)
+//   ready     → passive status     (overflow: dispatch / mark picked up / hand over)
+// Urgency: amber glow after 5 min, red pulsing after 8 min.
 function OrderCard({ order, now, onAccept, onReject, onReady, onDispatch, onPickedUp, onPriority, onServed }) {
   const TypeIcon = TYPE_ICONS[order.type] || ShoppingBag
   const createdMs = now - new Date(order.created_at).getTime()
   const acceptedMs = order.accepted_at ? now - new Date(order.accepted_at).getTime() : 0
   const readyMs = order.ready_at ? now - new Date(order.ready_at).getTime() : 0
 
-  const isLate = createdMs > 15 * 60 * 1000 && order.status !== 'ready'
-  const isUrgent = createdMs > 25 * 60 * 1000 || order.priority
+  // New urgency thresholds (5 min amber, 8 min red) — only active until ready.
+  const isLate   = order.status !== 'ready' && createdMs > 5 * 60 * 1000
+  const isUrgent = order.status !== 'ready' && (createdMs > 8 * 60 * 1000 || order.priority)
 
   const provider = order.delivery_method || order.delivery_provider
   const providerInfo = provider ? PROVIDER_LABEL[provider] : null
   const isDelivery = order.type === 'delivery'
   const isDineIn = order.type === 'dine-in'
 
-  // Predictive courier dispatch (kept from previous version).
   const courierAlreadyRequested = isDelivery && ['courier_requested', 'courier_assigned', 'picked_up', 'on_the_way', 'delivered'].includes(order.delivery_status)
-  const prepTime = parseInt(order.prep_time_total) || 15
-  const courierEta = parseInt(order.courier_eta) || 0
-  const dispatchAtMin = Math.max(0, prepTime - courierEta)
-  const elapsedPrepMin = order.accepted_at ? acceptedMs / 60000 : 0
-  const minutesUntilDispatch = Math.max(0, dispatchAtMin - elapsedPrepMin)
-  const shouldRecommendDispatch = isDelivery && order.status === 'preparing' && !courierAlreadyRequested && courierEta > 0 && elapsedPrepMin >= dispatchAtMin
 
   // Per-status accent system
   const accent = order.status === 'received'
-    ? { ring: 'ring-amber-400/40', glow: 'shadow-[0_0_40px_-10px_rgba(212,165,74,0.45)]', dot: 'bg-amber-400', text: 'text-amber-300', edge: 'before:from-amber-400/70 before:via-amber-400/20' }
+    ? { glow: 'shadow-[0_0_32px_-12px_rgba(212,165,74,0.4)]', edge: 'before:from-amber-400/70 before:via-amber-400/20', ring: 'ring-amber-400/30' }
     : order.status === 'preparing'
-      ? { ring: 'ring-sky-400/40', glow: 'shadow-[0_0_40px_-10px_rgba(56,189,248,0.45)]', dot: 'bg-sky-400', text: 'text-sky-300', edge: 'before:from-sky-400/70 before:via-sky-400/20' }
-      : { ring: 'ring-emerald-400/40', glow: 'shadow-[0_0_40px_-10px_rgba(16,185,129,0.45)]', dot: 'bg-emerald-400', text: 'text-emerald-300', edge: 'before:from-emerald-400/70 before:via-emerald-400/20' }
+      ? { glow: 'shadow-[0_0_32px_-12px_rgba(56,189,248,0.4)]', edge: 'before:from-sky-400/70 before:via-sky-400/20', ring: 'ring-sky-400/30' }
+      : { glow: 'shadow-[0_0_32px_-12px_rgba(16,185,129,0.4)]', edge: 'before:from-emerald-400/70 before:via-emerald-400/20', ring: 'ring-emerald-400/30' }
 
-  // Urgency overrides
   const urgencyRing = isUrgent
-    ? 'ring-2 ring-red-500/70 animate-[pulse_1.6s_ease-in-out_infinite]'
+    ? 'ring-2 ring-red-500/70 animate-[pulse_1.6s_ease-in-out_infinite] shadow-[0_0_36px_-8px_rgba(239,68,68,0.5)]'
     : isLate
-      ? 'ring-1 ring-amber-500/60'
+      ? 'ring-1 ring-amber-500/60 shadow-[0_0_32px_-10px_rgba(245,158,11,0.45)]'
       : `ring-1 ${accent.ring}`
 
   const itemCount = order.items?.reduce((s, i) => s + (i.quantity || 1), 0) || 0
   const itemNotes = (order.items || []).filter(i => i.notes)
+  const timeColor = isUrgent ? 'text-red-400' : isLate ? 'text-amber-300' : 'text-zinc-100'
 
   return (
-    <div className={`group relative overflow-hidden rounded-2xl bg-zinc-950/70 backdrop-blur-xl ${urgencyRing} ${accent.glow} transition-all hover:-translate-y-0.5 hover:shadow-[0_0_50px_-10px_rgba(212,165,74,0.55)]`}>
-      {/* Top neon edge */}
+    <div className={`group relative overflow-hidden rounded-2xl bg-zinc-950/70 backdrop-blur-xl ${urgencyRing} ${accent.glow} transition-all`}>
       <div className={`absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent ${accent.edge} to-transparent`} />
 
       <div className="p-5">
@@ -89,13 +124,15 @@ function OrderCard({ order, now, onAccept, onReject, onReady, onDispatch, onPick
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h3 className="font-serif text-2xl tracking-tight text-zinc-50">#{order.order_number}</h3>
-              <Pill className="bg-white/5 text-zinc-300 border-white/10">
-                <TypeIcon className="h-3 w-3" />
-                {TYPE_LABEL[order.type] || order.type}
-              </Pill>
               {order.table_number && (
                 <Pill className="bg-amber-400/15 text-amber-200 border-amber-400/30">
                   Table {order.table_number}
+                </Pill>
+              )}
+              {!order.table_number && (
+                <Pill className="bg-white/5 text-zinc-300 border-white/10">
+                  <TypeIcon className="h-3 w-3" />
+                  {TYPE_LABEL[order.type] || order.type}
                 </Pill>
               )}
               {providerInfo && (
@@ -109,12 +146,11 @@ function OrderCard({ order, now, onAccept, onReject, onReady, onDispatch, onPick
             </div>
             <p className="mt-2 text-xs text-zinc-400">
               <span className="text-zinc-300">{order.customer?.name || 'Guest'}</span>
-              {order.customer?.phone && <span> · {order.customer.phone}</span>}
               <span> · {itemCount} item{itemCount !== 1 ? 's' : ''}</span>
             </p>
           </div>
           <div className="text-right shrink-0">
-            <div className={`flex items-center justify-end gap-1.5 font-mono text-2xl tabular-nums ${isUrgent ? 'text-red-400' : isLate ? 'text-amber-300' : 'text-zinc-100'}`}>
+            <div className={`flex items-center justify-end gap-1.5 font-mono text-2xl tabular-nums ${timeColor}`}>
               <Clock className="h-4 w-4 opacity-70" />
               {formatElapsed(createdMs)}
             </div>
@@ -133,7 +169,7 @@ function OrderCard({ order, now, onAccept, onReject, onReady, onDispatch, onPick
         </div>
 
         {/* Items */}
-        <div className="space-y-1.5 mb-4">
+        <div className="space-y-1 mb-3">
           {order.items?.map((i, idx) => (
             <div key={idx} className="flex items-baseline gap-3 text-[15px]">
               <span className="font-mono text-amber-300 w-7 tabular-nums">{i.quantity}×</span>
@@ -144,8 +180,8 @@ function OrderCard({ order, now, onAccept, onReject, onReady, onDispatch, onPick
 
         {/* Notes / allergens */}
         {(order.notes || itemNotes.length > 0) && (
-          <div className="mb-4 rounded-xl border border-amber-400/25 bg-amber-400/[0.06] px-3 py-2.5">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.22em] text-amber-300/90 font-semibold mb-1">
+          <div className="mb-3 rounded-xl border border-amber-400/25 bg-amber-400/[0.06] px-3 py-2">
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.22em] text-amber-300/90 font-semibold mb-0.5">
               <Bell className="h-3 w-3" /> Special Request
             </div>
             {order.notes && (
@@ -159,77 +195,95 @@ function OrderCard({ order, now, onAccept, onReject, onReady, onDispatch, onPick
           </div>
         )}
 
-        {/* Predictive courier dispatch */}
-        {isDelivery && order.status === 'preparing' && !courierAlreadyRequested && courierEta > 0 && (
-          <div className={`mb-4 rounded-xl px-3 py-2.5 text-xs border ${shouldRecommendDispatch ? 'bg-amber-400/15 border-amber-400/40 text-amber-200 animate-pulse' : 'bg-white/[0.04] border-white/10 text-zinc-300'}`}>
-            {shouldRecommendDispatch ? (
-              <div className="flex items-center gap-2 font-semibold">
-                <Bell className="h-3.5 w-3.5" /> Dispatch courier now
-              </div>
-            ) : (
-              <div className="flex items-center justify-between">
-                <span className="text-zinc-400">Prep ~{prepTime}min · Courier ~{courierEta}min</span>
-                <span className="font-semibold text-zinc-100">in {Math.ceil(minutesUntilDispatch)}min</span>
-              </div>
-            )}
-          </div>
-        )}
-        {isDelivery && courierAlreadyRequested && order.status === 'ready' && (
-          <div className="mb-4 rounded-xl px-3 py-2.5 text-xs bg-amber-400/10 border border-amber-400/30 text-amber-200 flex items-center gap-2 font-semibold">
-            <Clock className="h-3.5 w-3.5" /> Waiting for courier pickup
-          </div>
-        )}
-
-        {/* Actions */}
+        {/* Actions — one primary CTA + overflow */}
         <div className="flex gap-2">
           {order.status === 'received' && (
             <>
-              <Button onClick={() => onAccept(order.id)} className="flex-1 h-12 text-[15px] font-semibold bg-gradient-to-b from-amber-300 to-amber-500 hover:from-amber-200 hover:to-amber-400 text-zinc-950 shadow-lg shadow-amber-500/30 border-0">
-                <ChefHat className="h-4 w-4 mr-2" /> Accept &amp; Start
+              <Button
+                onClick={() => onAccept(order.id)}
+                className="flex-1 h-12 text-base font-semibold bg-gradient-to-b from-amber-300 to-amber-500 hover:from-amber-200 hover:to-amber-400 text-zinc-950 shadow-md shadow-amber-500/25 border-0"
+              >
+                <ChefHat className="h-4 w-4 mr-2" /> Start Cooking
               </Button>
-              <Button onClick={() => onReject(order.id)} variant="outline" className="h-12 px-4 bg-white/5 hover:bg-white/10 border-white/10 text-zinc-300">
-                Reject
-              </Button>
+              <OverflowMenu>
+                {(close) => (
+                  <>
+                    <OverflowItem onClick={() => { onPriority(order.id, !order.priority); close() }}>
+                      <Flame className={`h-4 w-4 ${order.priority ? 'fill-red-500 text-red-500' : 'text-zinc-400'}`} />
+                      {order.priority ? 'Clear priority' : 'Mark as priority'}
+                    </OverflowItem>
+                    <OverflowItem onClick={() => { onReject(order.id); close() }} danger>
+                      <XCircle className="h-4 w-4" /> Reject order
+                    </OverflowItem>
+                  </>
+                )}
+              </OverflowMenu>
             </>
           )}
+
           {order.status === 'preparing' && (
             <>
-              {isDelivery && !courierAlreadyRequested && (
-                <Button onClick={() => onDispatch(order)} className={`flex-1 h-12 text-[15px] font-semibold border-0 ${shouldRecommendDispatch
-                  ? 'bg-gradient-to-b from-amber-300 to-amber-500 text-zinc-950 shadow-lg shadow-amber-500/30'
-                  : 'bg-white/5 hover:bg-white/10 text-zinc-200 ring-1 ring-white/10'}`}>
-                  <Bike className="h-4 w-4 mr-2" /> Call Courier
-                </Button>
-              )}
-              <Button onClick={() => onReady(order.id)} className="flex-1 h-12 text-[15px] font-semibold bg-gradient-to-b from-sky-500 to-sky-700 hover:from-sky-400 hover:to-sky-600 text-white shadow-lg shadow-sky-500/30 border-0">
-                <PackageCheck className="h-4 w-4 mr-2" /> Food Ready
+              <Button
+                onClick={() => onReady(order.id)}
+                className="flex-1 h-12 text-base font-semibold bg-gradient-to-b from-sky-500 to-sky-700 hover:from-sky-400 hover:to-sky-600 text-white shadow-md shadow-sky-500/25 border-0"
+              >
+                <PackageCheck className="h-4 w-4 mr-2" /> Ready
               </Button>
+              <OverflowMenu>
+                {(close) => (
+                  <>
+                    <OverflowItem onClick={() => { onPriority(order.id, !order.priority); close() }}>
+                      <Flame className={`h-4 w-4 ${order.priority ? 'fill-red-500 text-red-500' : 'text-zinc-400'}`} />
+                      {order.priority ? 'Clear priority' : 'Mark as priority'}
+                    </OverflowItem>
+                    {isDelivery && !courierAlreadyRequested && (
+                      <OverflowItem onClick={() => { onDispatch(order); close() }}>
+                        <Bike className="h-4 w-4 text-amber-300" /> Call courier
+                      </OverflowItem>
+                    )}
+                  </>
+                )}
+              </OverflowMenu>
             </>
           )}
-          {order.status === 'ready' && isDelivery && courierAlreadyRequested && (
-            <Button onClick={() => onPickedUp(order.id)} className="flex-1 h-12 text-[15px] font-semibold bg-gradient-to-b from-amber-300 to-amber-500 hover:from-amber-200 hover:to-amber-400 text-zinc-950 shadow-lg shadow-amber-500/30 border-0">
-              <Truck className="h-4 w-4 mr-2" /> Mark Picked Up
-            </Button>
+
+          {order.status === 'ready' && (
+            <>
+              <div className="flex-1 h-12 px-4 rounded-md bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center gap-2 text-sm text-emerald-300 font-semibold">
+                <CheckCircle2 className="h-4 w-4" />
+                <span>
+                  {isDineIn
+                    ? `Waiter notified · Table ${order.table_number || '?'}`
+                    : isDelivery
+                      ? (courierAlreadyRequested ? 'Awaiting courier pickup' : 'Ready for courier')
+                      : 'Ready for pickup'}
+                </span>
+              </div>
+              {(isDelivery || (!isDineIn && !isDelivery)) && (
+                <OverflowMenu>
+                  {(close) => (
+                    <>
+                      {isDelivery && !courierAlreadyRequested && (
+                        <OverflowItem onClick={() => { onDispatch(order); close() }}>
+                          <Bike className="h-4 w-4 text-amber-300" /> Dispatch courier
+                        </OverflowItem>
+                      )}
+                      {isDelivery && courierAlreadyRequested && (
+                        <OverflowItem onClick={() => { onPickedUp(order.id); close() }}>
+                          <Truck className="h-4 w-4 text-amber-300" /> Mark picked up
+                        </OverflowItem>
+                      )}
+                      {!isDineIn && !isDelivery && (
+                        <OverflowItem onClick={() => { onServed(order.id); close() }}>
+                          <CheckCircle2 className="h-4 w-4 text-emerald-300" /> Hand over
+                        </OverflowItem>
+                      )}
+                    </>
+                  )}
+                </OverflowMenu>
+              )}
+            </>
           )}
-          {order.status === 'ready' && isDelivery && !courierAlreadyRequested && (
-            <Button onClick={() => onDispatch(order)} className="flex-1 h-12 text-[15px] font-semibold bg-gradient-to-b from-amber-300 to-amber-500 hover:from-amber-200 hover:to-amber-400 text-zinc-950 shadow-lg shadow-amber-500/30 border-0">
-              <Bike className="h-4 w-4 mr-2" /> Dispatch Courier
-            </Button>
-          )}
-          {order.status === 'ready' && isDineIn && (
-            <div className="flex-1 h-12 px-4 rounded-md bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center gap-2 text-sm text-emerald-300 font-semibold">
-              <CheckCircle2 className="h-4 w-4" />
-              <span>Waiter notified · Table {order.table_number || '?'}</span>
-            </div>
-          )}
-          {order.status === 'ready' && !isDelivery && !isDineIn && (
-            <Button onClick={() => onServed(order.id)} className="flex-1 h-12 text-[15px] font-semibold bg-gradient-to-b from-emerald-500 to-emerald-700 hover:from-emerald-400 hover:to-emerald-600 text-white shadow-lg shadow-emerald-500/30 border-0">
-              <CheckCircle2 className="h-4 w-4 mr-2" /> Hand Over
-            </Button>
-          )}
-          <Button onClick={() => onPriority(order.id, !order.priority)} variant="outline" size="icon" className="h-12 w-12 bg-white/5 hover:bg-white/10 border-white/10" title="Toggle priority">
-            <Flame className={`h-4 w-4 ${order.priority ? 'fill-red-500 text-red-500' : 'text-zinc-400'}`} />
-          </Button>
         </div>
       </div>
     </div>
@@ -621,7 +675,7 @@ function KitchenPage() {
                   </div>
                   <div className="rounded-2xl bg-zinc-950/70 ring-1 ring-white/10 p-5">
                     <p className="font-medium text-zinc-100">Urgency thresholds</p>
-                    <p className="text-xs text-zinc-500 mt-0.5">Amber border &gt;15 min · Red pulsing border &gt;25 min</p>
+                    <p className="text-xs text-zinc-500 mt-0.5">Amber glow &gt;5 min · Red pulsing glow &gt;8 min</p>
                   </div>
                 </div>
               </div>
