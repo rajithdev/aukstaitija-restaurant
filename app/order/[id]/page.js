@@ -424,10 +424,26 @@ function OrderTrack() {
 
           {!isServed && (
             <>
-              <p className="text-center text-xs text-muted-foreground mt-6">This page updates live every 5 seconds.</p>
-              <div className="text-center mt-4">
-                <Link href="/menu" className="text-sm text-primary hover:underline">Order again →</Link>
+              {/* Compact secondary actions during active tracking — keeps the
+                  page calm and focused on the live timeline, while still
+                  offering a one-tap escape hatch to call staff. */}
+              <div className="mt-8 flex flex-col sm:flex-row gap-2.5 sm:gap-3 sm:justify-center">
+                <Link
+                  href="/menu"
+                  className="group inline-flex items-center justify-center gap-2 h-11 px-5 rounded-full border border-border bg-card hover:bg-accent/40 hover:border-primary/40 text-sm font-medium text-foreground transition-all"
+                >
+                  <BookOpen className="h-4 w-4 text-primary/80 group-hover:text-primary transition-colors" />
+                  Order Again
+                </Link>
+                <button
+                  onClick={() => { setSelectedType(null); setAssistanceNote(''); setShowAssistance(true) }}
+                  className="group inline-flex items-center justify-center gap-2 h-11 px-5 rounded-full border border-amber-500/30 bg-amber-500/[0.06] hover:bg-amber-500/15 hover:border-amber-500/50 text-sm font-medium text-amber-200 transition-all"
+                >
+                  <Bell className="h-4 w-4" />
+                  Request Assistance
+                </button>
               </div>
+              <p className="text-center text-[11px] text-muted-foreground/80 mt-5">This page updates live every 5 seconds.</p>
             </>
           )}
         </div>
