@@ -1129,7 +1129,44 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json(enriched))
     }
 
-    // POST /waiter/notifications/:id/pickup (admin) — waiter takes the plate
+    // PATCH /waiter/bills/:id (admin) — update an open bill's note, payment
+    // method, or cancel the "bill requested" flag. Used by the bill drawer:
+    //   • body.note               → save the waiter's quick note on the bill
+    //   • body.payment_method     → 'cash' | 'card'  (set before clicking
+    //                                Payment Completed so the close-out
+    //                                snapshot records how it was paid)
+    //   • body.cancel_request:true → flip status back from 'bill_requested'
+    //                                to 'awaiting_payment' and resolve any
+    //                                pending bill guest_request for this
+    //                                table.
+    if (path[0] === 'waiter' && path[1] === 'bills' && path.length === 3 && method === 'PATCH') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const bill = await db.collection('bill_sessions').findOne({ id: path[2] })
+      if (!bill) return handleCORS(NextResponse.json({ error: 'Bill not found' }, { status: 404 }))
+      if (bill.status === 'paid') {
+        return handleCORS(NextResponse.json({ error: 'Bill already paid' }, { status: 400 }))
+      }
+      const body = await request.json().catch(() => ({}))
+      const now = new Date()
+      const update = { updated_at: now }
+      if (typeof body.note === 'string') update.note = body.note
+      if (body.payment_method && ['cash', 'card'].includes(body.payment_method)) {
+        update.payment_method = body.payment_method
+      }
+      if (body.cancel_request === true) {
+        update.status = 'awaiting_payment'
+        update.bill_requested = false
+        update.bill_request_cancelled_at = now
+        // Also resolve any pending guest_request for this table of type 'bill'
+        await db.collection('guest_requests').updateMany(
+          { table_id: bill.table_id, request_type: 'bill', status: 'pending' },
+          { $set: { status: 'resolved', resolved_at: now, resolved_reason: 'cancelled_by_waiter' } }
+        )
+      }
+      await db.collection('bill_sessions').updateOne({ id: path[2] }, { $set: update })
+      const updated = await db.collection('bill_sessions').findOne({ id: path[2] })
+      return handleCORS(NextResponse.json(stripId(updated)))
+    }
     // off the pass. Updates BOTH the notification and the underlying order so
     // existing customer tracking (waiter_picked_up_at, serve_status) keeps working.
     if (path[0] === 'waiter' && path[1] === 'notifications' && path.length === 4 && path[3] === 'pickup' && method === 'POST') {
