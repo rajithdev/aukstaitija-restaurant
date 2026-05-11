@@ -4,10 +4,11 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import {
   ChefHat, Truck, ShoppingBag, Utensils, Clock, Bell, BellOff, LogOut,
   ArrowLeft, Volume2, Flame, CheckCircle2, PackageCheck, Bike,
-  LayoutGrid, Inbox, Soup, Settings, History, Activity, MoreVertical, XCircle,
+  LayoutGrid, Inbox, Soup, Settings, History, Activity, MoreVertical, XCircle, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import DispatchModal from '@/components/DispatchModal'
@@ -77,13 +78,18 @@ const OverflowItem = ({ onClick, children, danger }) => (
 // ── Order card ──────────────────────────────────────────────────────────────
 // Ultra-minimal kitchen workflow:
 //   Incoming Queue (received + preparing) → ONE button: "Food Ready"
-//   Ready                                  → passive holding area (no chef action)
+//                                         + inline header icons: Priority · Reject
+//   Ready                                  → passive holding area (overflow menu
+//                                            for delivery dispatch / pickup hand-off)
 // Urgency: amber glow after 5 min, red pulsing after 8 min.
 function OrderCard({ order, now, onReject, onReady, onDispatch, onPickedUp, onPriority, onServed }) {
   const TypeIcon = TYPE_ICONS[order.type] || ShoppingBag
   const createdMs = now - new Date(order.created_at).getTime()
   const readyMs = order.ready_at ? now - new Date(order.ready_at).getTime() : 0
   const isReady = order.status === 'ready'
+
+  // Local UI state for the reject confirmation modal.
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false)
 
   // Urgency thresholds (5 min amber, 8 min red) — only active until ready.
   const isLate   = !isReady && createdMs > 5 * 60 * 1000
@@ -136,7 +142,7 @@ function OrderCard({ order, now, onReject, onReady, onDispatch, onPickedUp, onPr
                 <Pill className={providerInfo.cls}>{providerInfo.label}</Pill>
               )}
               {order.priority && (
-                <Pill className="bg-red-500/15 text-red-300 border-red-500/30">
+                <Pill className="bg-red-500/15 text-red-300 border-red-500/30 animate-[pulse_2s_ease-in-out_infinite]">
                   <Flame className="h-3 w-3" /> Priority
                 </Pill>
               )}
@@ -146,16 +152,46 @@ function OrderCard({ order, now, onReject, onReady, onDispatch, onPickedUp, onPr
               <span> · {itemCount} item{itemCount !== 1 ? 's' : ''}</span>
             </p>
           </div>
-          <div className="text-right shrink-0">
+          <div className="text-right shrink-0 flex flex-col items-end gap-1.5">
             <div className={`flex items-center justify-end gap-1.5 font-mono text-2xl tabular-nums ${timeColor}`}>
               <Clock className="h-4 w-4 opacity-70" />
               {formatElapsed(createdMs)}
             </div>
-            <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-0.5">since order</p>
+            <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 -mt-0.5">since order</p>
             {isReady && (
-              <p className="text-[11px] mt-1 font-mono text-emerald-300 tabular-nums">
+              <p className="text-[11px] font-mono text-emerald-300 tabular-nums">
                 <span className="opacity-70">waiting</span> {formatElapsed(readyMs)}
               </p>
+            )}
+
+            {/* Inline quick actions — only for orders still being cooked.
+                One-tap priority toggle + one-tap reject (with confirm modal).
+                Eliminates the 3-dot overflow menu for max chef speed. */}
+            {!isReady && (
+              <div className="flex items-center gap-1.5 mt-1">
+                <button
+                  type="button"
+                  onClick={() => onPriority(order.id, !order.priority)}
+                  title={order.priority ? 'Clear priority' : 'Mark as priority'}
+                  aria-label={order.priority ? 'Clear priority' : 'Mark as priority'}
+                  className={`h-9 w-9 rounded-lg flex items-center justify-center border transition-all active:scale-95 ${
+                    order.priority
+                      ? 'bg-red-500/20 border-red-500/50 text-red-300 shadow-[0_0_14px_-2px_rgba(239,68,68,0.55)] animate-[pulse_2s_ease-in-out_infinite]'
+                      : 'bg-white/[0.04] border-white/10 text-zinc-500 hover:text-amber-300 hover:bg-amber-500/10 hover:border-amber-500/40'
+                  }`}
+                >
+                  <Flame className={`h-4 w-4 ${order.priority ? 'fill-red-500/40' : ''}`} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRejectConfirmOpen(true)}
+                  title="Reject order"
+                  aria-label="Reject order"
+                  className="h-9 w-9 rounded-lg flex items-center justify-center border bg-white/[0.04] border-white/10 text-zinc-500 hover:text-red-300 hover:bg-red-500/15 hover:border-red-500/40 transition-all active:scale-95"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -187,30 +223,15 @@ function OrderCard({ order, now, onReject, onReady, onDispatch, onPickedUp, onPr
           </div>
         )}
 
-        {/* Actions — one primary CTA + overflow, OR passive Ready state */}
+        {/* Actions — single CTA for cooking orders, passive label for ready */}
         <div className="flex gap-2">
           {!isReady && (
-            <>
-              <Button
-                onClick={() => onReady(order.id)}
-                className="flex-1 h-12 text-base font-semibold bg-gradient-to-b from-emerald-400 to-emerald-600 hover:from-emerald-300 hover:to-emerald-500 text-zinc-950 shadow-md shadow-emerald-500/25 border-0"
-              >
-                <CheckCircle2 className="h-4 w-4 mr-2" /> Food Ready
-              </Button>
-              <OverflowMenu>
-                {(close) => (
-                  <>
-                    <OverflowItem onClick={() => { onPriority(order.id, !order.priority); close() }}>
-                      <Flame className={`h-4 w-4 ${order.priority ? 'fill-red-500 text-red-500' : 'text-zinc-400'}`} />
-                      {order.priority ? 'Clear priority' : 'Mark as priority'}
-                    </OverflowItem>
-                    <OverflowItem onClick={() => { onReject(order.id); close() }} danger>
-                      <XCircle className="h-4 w-4" /> Reject order
-                    </OverflowItem>
-                  </>
-                )}
-              </OverflowMenu>
-            </>
+            <Button
+              onClick={() => onReady(order.id)}
+              className="flex-1 h-12 text-base font-semibold bg-gradient-to-b from-emerald-400 to-emerald-600 hover:from-emerald-300 hover:to-emerald-500 text-zinc-950 shadow-md shadow-emerald-500/25 border-0"
+            >
+              <CheckCircle2 className="h-4 w-4 mr-2" /> Food Ready
+            </Button>
           )}
 
           {isReady && (
@@ -252,6 +273,35 @@ function OrderCard({ order, now, onReject, onReady, onDispatch, onPickedUp, onPr
           )}
         </div>
       </div>
+
+      {/* Reject confirmation — compact, premium, locked to KDS dark palette. */}
+      <Dialog open={rejectConfirmOpen} onOpenChange={setRejectConfirmOpen}>
+        <DialogContent className="dark bg-zinc-950 border border-white/10 text-zinc-100 sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="font-serif text-2xl text-zinc-50">Reject this order?</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Order <span className="font-mono text-zinc-200">#{order.order_number}</span>
+              {order.table_number ? <> · Table <span className="text-amber-300">{order.table_number}</span></> : null}
+              <span className="block mt-1 text-xs text-zinc-500">This cannot be undone.</span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => setRejectConfirmOpen(false)}
+              className="text-zinc-300 hover:text-zinc-100 hover:bg-white/5 border border-white/10"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => { setRejectConfirmOpen(false); onReject(order.id) }}
+              className="bg-gradient-to-b from-red-500 to-red-700 hover:from-red-400 hover:to-red-600 text-white border-0 shadow-md shadow-red-500/25"
+            >
+              <X className="h-4 w-4 mr-1.5" /> Reject Order
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -408,7 +458,8 @@ function KitchenPage() {
   }
 
   const handleReject = async (id) => {
-    if (!confirm('Reject this order? This cannot be undone.')) return
+    // Confirmation is handled by the inline dialog inside each OrderCard now,
+    // so we can call this directly without an extra confirm() prompt.
     await updateOrder(id, { status: 'cancelled' })
     toast.success('Order rejected')
   }
