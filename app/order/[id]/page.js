@@ -7,8 +7,24 @@ import Footer from '@/components/Footer'
 import RequestWaiterButton from '@/components/RequestWaiterButton'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { useApp } from '@/lib/AppContext'
-import { CheckCircle2, ChefHat, Clock, Truck, PackageCheck, Bike, Map, Utensils, Soup, Hand, Sparkles, X } from 'lucide-react'
+import { toast } from 'sonner'
+import {
+  CheckCircle2, ChefHat, Clock, Truck, PackageCheck, Bike, Map, Utensils,
+  Soup, Hand, Sparkles, X,
+  Bell, Droplets, Receipt, AlertTriangle, HelpCircle, Heart, BookOpen,
+} from 'lucide-react'
+
+// Hospitality request types — mirror the floating Need Help pill, but rendered
+// inline as the post-served primary action.
+const ASSISTANCE_TYPES = [
+  { id: 'waiter',  label: 'Request Waiter',     icon: Bell,           color: 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-300' },
+  { id: 'water',   label: 'Need Water',         icon: Droplets,       color: 'bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/30 text-blue-300' },
+  { id: 'bill',    label: 'Request Bill',       icon: Receipt,        color: 'bg-purple-500/10 hover:bg-purple-500/20 border-purple-500/30 text-purple-300' },
+  { id: 'allergy', label: 'Allergy Assistance', icon: AlertTriangle,  color: 'bg-red-500/10 hover:bg-red-500/20 border-red-500/30 text-red-300' },
+  { id: 'other',   label: 'Other Help',         icon: HelpCircle,     color: 'bg-zinc-500/10 hover:bg-zinc-500/20 border-zinc-500/30 text-zinc-300' },
+]
 
 // Stage definitions are language-agnostic — each has a stable `key` plus the
 // translation `path` under track_stage.<kind>.<key>. Display labels come from
@@ -73,10 +89,55 @@ function progressIndex(order, kind) {
 
 function OrderTrack() {
   const params = useParams()
-  const { t, lang } = useApp()
+  const { t, lang, tableId, tableNumber } = useApp()
   const [order, setOrder] = useState(null)
   const [error, setError] = useState(false)
   const [showReservationPromo, setShowReservationPromo] = useState(true)
+
+  // Post-served hospitality mode
+  const [showAssistance, setShowAssistance] = useState(false)
+  const [selectedType, setSelectedType] = useState(null)
+  const [assistanceNote, setAssistanceNote] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const submitAssistance = async (typeId, noteText) => {
+    if (!tableId && !order?.table_id) {
+      toast.error('Table session not found')
+      return
+    }
+    setSubmitting(true)
+    try {
+      const res = await fetch('/api/guest-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          table_id: tableId || order?.table_id,
+          request_type: typeId,
+          note: noteText,
+        }),
+      })
+      if (res.ok) {
+        toast.success('Request sent — staff will be with you shortly')
+        setShowAssistance(false)
+        setSelectedType(null)
+        setAssistanceNote('')
+      } else {
+        toast.error('Failed to send request')
+      }
+    } catch (e) {
+      toast.error('Failed to send request')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleAssistanceTap = async (type) => {
+    setSelectedType(type)
+    // For waiter/water/bill, send immediately — no note step.
+    if (type.id !== 'allergy' && type.id !== 'other') {
+      await submitAssistance(type.id, '')
+    }
+  }
 
   const fetchOrder = async () => {
     const res = await fetch(`/api/orders/${params.id}`)
@@ -98,6 +159,9 @@ function OrderTrack() {
 
   const isDelivery = order.type === 'delivery'
   const isDineIn = !isDelivery && (order.order_type === 'dine_in' || order.type === 'dine-in' || !!order.table_id)
+  // Post-served hospitality mode trigger: waiter pressed "Served" OR order
+  // moved to delivered. Only meaningful for dine-in customers.
+  const isServed = isDineIn && (order.serve_status === 'served' || order.status === 'delivered')
   const kind = isDelivery ? 'delivery' : (isDineIn ? 'dinein' : 'pickup')
   const stages = kind === 'delivery' ? STAGES_DELIVERY : kind === 'dinein' ? STAGES_DINEIN : STAGES_PICKUP
   const currentIdx = progressIndex(order, kind)
@@ -148,9 +212,17 @@ function OrderTrack() {
       <Navbar />
       <div className="container mx-auto py-10">
         <div className="max-w-3xl mx-auto">
+          {/* ── HEADER ─────────────────────────────────────────────── */}
           <div className="text-center mb-10">
             <p className="text-primary text-xs uppercase tracking-[0.4em] mb-3">Order #{order.order_number}</p>
-            <h1 className="font-serif text-5xl mb-3">{headlineLabel}</h1>
+            {isServed ? (
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-700">
+                <h1 className="font-serif text-5xl mb-3 tracking-tight">Enjoy your meal</h1>
+                <p className="text-muted-foreground text-base">Need anything? We're here to help.</p>
+              </div>
+            ) : (
+              <h1 className="font-serif text-5xl mb-3">{headlineLabel}</h1>
+            )}
             {isDelivery && providerBadge && (
               <div className="inline-flex items-center gap-2 mt-1">
                 <span className={`text-xs uppercase tracking-wider px-3 py-1 rounded-full ${providerBadge.color}`}>
@@ -161,7 +233,7 @@ function OrderTrack() {
               </div>
             )}
             {isDineIn && order.table_number && (
-              <div className="inline-flex items-center gap-2 mt-1">
+              <div className="inline-flex items-center gap-2 mt-4">
                 <span className="text-xs uppercase tracking-wider px-3 py-1 rounded-full bg-primary/15 text-primary">
                   <Utensils className="h-3 w-3 inline mr-1" /> {t('track_stage.table')} {order.table_number}
                 </span>
@@ -176,34 +248,88 @@ function OrderTrack() {
             )}
           </div>
 
-          {/* Vertical timeline */}
-          <Card className="p-8 mb-6 bg-card">
-            <ol className="relative border-l-2 border-border ml-3 space-y-6">
-              {stages.map((s, i) => {
-                const Icon = s.icon
-                const reached = i <= currentIdx
-                const isCurrent = i === currentIdx
-                // Use custom label for "ready" stage in dine-in, otherwise use translation
-                const label = (kind === 'dinein' && s.key === 'ready') 
-                  ? 'Food ready — on the way to your table'
-                  : t(`track_stage.${kind}.${s.key}`)
-                return (
-                  <li key={s.key} className="ml-6">
-                    <div className={`absolute -left-3 w-6 h-6 rounded-full flex items-center justify-center ${reached ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'} ${isCurrent ? 'ring-4 ring-primary/30 animate-pulse' : ''}`}>
-                      <Icon className="h-3 w-3" />
+          {/* ── HOSPITALITY MODE (post-served) ─────────────────────── */}
+          {isServed && (
+            <Card className="relative overflow-hidden p-8 mb-6 bg-gradient-to-br from-amber-950/30 via-zinc-900/60 to-zinc-900/40 border-amber-500/20 animate-in fade-in slide-in-from-bottom-3 duration-700">
+              <div className="absolute inset-0 bg-gradient-to-br from-amber-500/[0.04] to-transparent pointer-events-none" />
+              <div className="relative">
+                <div className="flex items-center justify-center gap-2 mb-6 text-amber-300/80">
+                  <Heart className="h-4 w-4" />
+                  <span className="text-[10px] uppercase tracking-[0.4em] font-semibold">Hospitality</span>
+                  <Heart className="h-4 w-4" />
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-4">
+                  {/* Primary: Request Assistance */}
+                  <button
+                    onClick={() => { setSelectedType(null); setAssistanceNote(''); setShowAssistance(true) }}
+                    className="group relative overflow-hidden rounded-xl border border-amber-500/30 bg-gradient-to-br from-amber-500/15 via-amber-500/5 to-transparent hover:from-amber-500/25 hover:via-amber-500/10 transition-all p-6 text-left shadow-lg shadow-amber-500/10 hover:shadow-amber-500/25"
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className="h-12 w-12 shrink-0 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center group-hover:scale-105 transition">
+                        <Bell className="h-5 w-5 text-amber-300" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-serif text-xl text-foreground mb-1">Request Assistance</p>
+                        <p className="text-xs text-muted-foreground leading-relaxed">Call a waiter, ask for water, request the bill, or more.</p>
+                      </div>
                     </div>
-                    <p className={`text-sm font-medium ${reached ? 'text-foreground' : 'text-muted-foreground'}`}>{label}</p>
-                    {isCurrent && (
-                      <p className="text-xs text-muted-foreground mt-0.5">{hintFor(s)}</p>
-                    )}
-                  </li>
-                )
-              })}
-            </ol>
-          </Card>
+                  </button>
+
+                  {/* Secondary: Order Again */}
+                  <Link
+                    href="/menu"
+                    className="group relative overflow-hidden rounded-xl border border-border bg-card hover:bg-accent/30 transition-all p-6 shadow-sm hover:shadow-md"
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className="h-12 w-12 shrink-0 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center group-hover:scale-105 transition">
+                        <BookOpen className="h-5 w-5 text-primary" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-serif text-xl text-foreground mb-1">Order Again</p>
+                        <p className="text-xs text-muted-foreground leading-relaxed">Browse the menu — new items add to your open bill.</p>
+                      </div>
+                    </div>
+                  </Link>
+                </div>
+
+                <p className="mt-6 text-center text-[11px] text-muted-foreground/70">
+                  Your bill is open at the table. Pay anytime — no rush.
+                </p>
+              </div>
+            </Card>
+          )}
+
+          {/* ── PRE-SERVED TIMELINE ─────────────────────────────────── */}
+          {!isServed && (
+            <Card className="p-8 mb-6 bg-card animate-in fade-in duration-500">
+              <ol className="relative border-l-2 border-border ml-3 space-y-6">
+                {stages.map((s, i) => {
+                  const Icon = s.icon
+                  const reached = i <= currentIdx
+                  const isCurrent = i === currentIdx
+                  // Use custom label for "ready" stage in dine-in, otherwise use translation
+                  const label = (kind === 'dinein' && s.key === 'ready')
+                    ? 'Food ready — on the way to your table'
+                    : t(`track_stage.${kind}.${s.key}`)
+                  return (
+                    <li key={s.key} className="ml-6">
+                      <div className={`absolute -left-3 w-6 h-6 rounded-full flex items-center justify-center ${reached ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'} ${isCurrent ? 'ring-4 ring-primary/30 animate-pulse' : ''}`}>
+                        <Icon className="h-3 w-3" />
+                      </div>
+                      <p className={`text-sm font-medium ${reached ? 'text-foreground' : 'text-muted-foreground'}`}>{label}</p>
+                      {isCurrent && (
+                        <p className="text-xs text-muted-foreground mt-0.5">{hintFor(s)}</p>
+                      )}
+                    </li>
+                  )
+                })}
+              </ol>
+            </Card>
+          )}
 
           {/* Subtle Reservation Promotion - Concierge Style */}
-          {showReservationPromo && isDineIn && (
+          {showReservationPromo && isDineIn && !isServed && (
             <Card className="relative p-6 mb-6 bg-gradient-to-br from-amber-950/30 via-zinc-900/50 to-zinc-900/50 border-amber-500/20 overflow-hidden">
               <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent opacity-50" />
               <button
@@ -275,7 +401,7 @@ function OrderTrack() {
 
           {/* Items */}
           <Card className="p-6 bg-card">
-            <h3 className="font-serif text-2xl mb-4">Order Details</h3>
+            <h3 className="font-serif text-2xl mb-4">{isServed ? 'Your Order' : 'Order Details'}</h3>
             <div className="space-y-2 text-sm mb-4">
               {order.items.map(i => (
                 <div key={i.id} className="flex justify-between">
@@ -296,14 +422,74 @@ function OrderTrack() {
             <p className="mt-4 text-xs text-muted-foreground">Payment: {order.payment_method === 'cash' ? 'Cash on delivery / Pay at restaurant' : order.payment_method}</p>
           </Card>
 
-          <p className="text-center text-xs text-muted-foreground mt-6">This page updates live every 5 seconds.</p>
-          <div className="text-center mt-4">
-            <Link href="/menu" className="text-sm text-primary hover:underline">Order again →</Link>
-          </div>
+          {!isServed && (
+            <>
+              <p className="text-center text-xs text-muted-foreground mt-6">This page updates live every 5 seconds.</p>
+              <div className="text-center mt-4">
+                <Link href="/menu" className="text-sm text-primary hover:underline">Order again →</Link>
+              </div>
+            </>
+          )}
         </div>
       </div>
       <Footer />
-      <RequestWaiterButton />
+      {/* Floating Need-Help pill is hidden in hospitality mode — the inline
+          Request Assistance button replaces it for a calmer post-meal feel. */}
+      {!isServed && <RequestWaiterButton />}
+
+      {/* Hospitality assistance dialog (post-served) */}
+      <Dialog open={showAssistance} onOpenChange={(o) => { setShowAssistance(o); if (!o) { setSelectedType(null); setAssistanceNote('') } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-serif text-2xl">Request Assistance</DialogTitle>
+            <DialogDescription className="text-base">
+              {order.table_number ? `Table ${order.table_number} — How can we help you?` : 'How can we help you?'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {!selectedType ? (
+            <div className="grid gap-3 py-4">
+              {ASSISTANCE_TYPES.map(type => {
+                const Icon = type.icon
+                return (
+                  <button
+                    key={type.id}
+                    onClick={() => handleAssistanceTap(type)}
+                    disabled={submitting}
+                    className={`flex items-center gap-3 p-4 rounded-lg border transition-all ${type.color}`}
+                  >
+                    <Icon className="h-5 w-5" />
+                    <span className="font-medium">{type.label}</span>
+                  </button>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="space-y-4 py-4">
+              <div className="flex items-center gap-3 p-4 rounded-lg border border-border bg-muted/50">
+                {(() => { const Icon = selectedType.icon; return <Icon className="h-5 w-5 text-muted-foreground" /> })()}
+                <span className="font-medium">{selectedType.label}</span>
+              </div>
+              <div>
+                <label className="text-sm text-muted-foreground mb-2 block">Additional details (optional)</label>
+                <textarea
+                  value={assistanceNote}
+                  onChange={e => setAssistanceNote(e.target.value)}
+                  placeholder={selectedType.id === 'allergy' ? 'e.g., severe peanut allergy at this table' : 'e.g., need extra plates'}
+                  className="w-full h-24 px-3 py-2 bg-background border border-border rounded-md text-sm resize-none"
+                  disabled={submitting}
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => { setSelectedType(null); setAssistanceNote('') }} disabled={submitting} className="flex-1">Back</Button>
+                <Button onClick={() => submitAssistance(selectedType.id, assistanceNote)} disabled={submitting} className="flex-1 bg-amber-600 hover:bg-amber-500">
+                  {submitting ? 'Sending…' : 'Send Request'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
