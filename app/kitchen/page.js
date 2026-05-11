@@ -495,11 +495,11 @@ function KitchenPage() {
 
   const cols = useMemo(() => {
     const sortAsc = (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-    const sortReady = (a, b) => new Date(a.ready_at || a.created_at).getTime() - new Date(b.ready_at || b.created_at).getTime()
     return {
       // Auto-accepted: every order in received OR preparing belongs to the live queue.
+      // Once chef taps "Food Ready", order transitions to status=ready and is
+      // immediately filtered out of the kitchen view — front-of-house takes over.
       incoming: visible.filter(o => o.status === 'received' || o.status === 'preparing').sort(sortAsc),
-      ready: visible.filter(o => o.status === 'ready').sort(sortReady),
     }
   }, [visible])
 
@@ -538,24 +538,16 @@ function KitchenPage() {
 
   // ── Layout ────────────────────────────────────────────────────────────────
   const navBadges = {
-    orders: cols.incoming.length + cols.ready.length,
-    incoming: cols.incoming.length,
-    ready: cols.ready.length,
+    orders: cols.incoming.length,
     completed: completed.length,
   }
 
-  const pickColumns = () => {
-    if (view === 'incoming') return [{ k: 'incoming', title: 'Incoming Queue', accent: COL_ACCENTS.incoming, icon: Inbox, list: cols.incoming }]
-    if (view === 'ready')    return [{ k: 'ready', title: 'Ready', accent: COL_ACCENTS.ready, icon: PackageCheck, list: cols.ready }]
-    return [
-      { k: 'incoming', title: 'Incoming Queue', accent: COL_ACCENTS.incoming, icon: Inbox,        list: cols.incoming },
-      { k: 'ready',    title: 'Ready',          accent: COL_ACCENTS.ready,    icon: PackageCheck, list: cols.ready },
-    ]
-  }
+  // Single centered column — no Ready board on the chef's screen.
+  // Front-of-house owns the order the moment it leaves the kitchen.
+  const columns = [{ k: 'incoming', title: 'Incoming Queue', accent: COL_ACCENTS.incoming, icon: Inbox, list: cols.incoming }]
 
   const showCompleted = view === 'completed'
   const showSettings = view === 'settings'
-  const columns = pickColumns()
 
   return (
     <div
@@ -581,12 +573,10 @@ function KitchenPage() {
 
           <nav className="px-3 py-4 space-y-1 flex-1">
             <p className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-[0.3em] text-zinc-600">Workflow</p>
-            <NavItem active={view === 'orders'}    icon={LayoutGrid}   label="Orders"    badge={navBadges.orders}    onClick={() => setView('orders')} />
-            <NavItem active={view === 'incoming'}  icon={Inbox}        label="Incoming"  badge={navBadges.incoming}  onClick={() => setView('incoming')} />
-            <NavItem active={view === 'ready'}     icon={PackageCheck} label="Ready"     badge={navBadges.ready}     onClick={() => setView('ready')} />
-            <NavItem active={view === 'completed'} icon={History}      label="Completed" badge={navBadges.completed} onClick={() => setView('completed')} />
+            <NavItem active={view === 'orders'}    icon={LayoutGrid}   label="Active Orders" badge={navBadges.orders}    onClick={() => setView('orders')} />
+            <NavItem active={view === 'completed'} icon={History}      label="Completed"     badge={navBadges.completed} onClick={() => setView('completed')} />
             <p className="px-4 pt-4 pb-1 text-[10px] uppercase tracking-[0.3em] text-zinc-600">System</p>
-            <NavItem active={view === 'settings'}  icon={Settings}     label="Settings"  onClick={() => setView('settings')} />
+            <NavItem active={view === 'settings'}  icon={Settings}     label="Settings"      onClick={() => setView('settings')} />
           </nav>
 
           <div className="px-5 py-4 border-t border-white/5">
@@ -749,25 +739,26 @@ function KitchenPage() {
             {/* Board view */}
             {!showCompleted && !showSettings && (
               <>
-                <div className={`grid gap-5 ${columns.length === 1 ? 'grid-cols-1' : 'md:grid-cols-2'}`}>
+                <div className="max-w-3xl mx-auto">
                   {columns.map(col => (
                     <section key={col.k} className="min-w-0">
                       <ColumnHeader title={col.title} count={col.list.length} accent={col.accent} icon={col.icon} />
                       <div className="space-y-4">
                         {col.list.length === 0 && (
-                          <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] py-16 px-6 text-center">
-                            <col.icon className="h-7 w-7 mx-auto text-zinc-600 mb-2" />
-                            <p className="text-sm text-zinc-500">
-                              {col.k === 'incoming' && 'Queue is clear · awaiting orders'}
-                              {col.k === 'ready' && 'No orders ready'}
-                            </p>
+                          <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] py-24 px-6 text-center">
+                            <col.icon className="h-9 w-9 mx-auto text-zinc-600 mb-3" />
+                            <p className="text-sm text-zinc-500">Queue is clear · awaiting orders</p>
+                            <p className="text-[11px] text-zinc-600 mt-1">New orders will appear here instantly.</p>
                           </div>
                         )}
                         {col.list.map(o => (
                           <OrderCard
                             key={o.id} order={o} now={now}
                             onReject={handleReject}
-                            onReady={(id) => updateOrder(id, { status: 'ready' })}
+                            onReady={async (id) => {
+                              await updateOrder(id, { status: 'ready' })
+                              toast.success('Waiter notified', { duration: 2200 })
+                            }}
                             onDispatch={handleDispatch}
                             onPickedUp={handlePickedUp}
                             onPriority={(id, p) => updateOrder(id, { priority: p })}
@@ -788,7 +779,7 @@ function KitchenPage() {
               <div className="px-6 py-3 grid grid-cols-2 md:grid-cols-4 gap-4">
                 <Stat label="Today's orders" value={analytics?.today_orders ?? '—'} icon={Activity} accent="text-amber-300" />
                 <Stat label="In queue" value={cols.incoming.length} icon={Inbox} accent="text-amber-300" />
-                <Stat label="Ready" value={cols.ready.length} icon={PackageCheck} accent="text-emerald-300" />
+                <Stat label="Completed" value={completed.length} icon={CheckCircle2} accent="text-emerald-300" />
                 <Stat label="Avg prep time" value={avgPrepMin > 0 ? `${avgPrepMin}m` : '—'} icon={Clock} accent="text-zinc-200" />
               </div>
             </footer>
