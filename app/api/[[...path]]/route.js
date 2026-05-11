@@ -177,6 +177,62 @@ async function getActiveSession(db, tableId) {
   return await db.collection('table_sessions').findOne({ table_id: tableId, session_status: 'active' })
 }
 
+// Idempotently open a bill_session for a table. Used by:
+//   • waiter clicks "Served" on a notification (or hits legacy /orders/:id/served)
+//   • customer taps "Request Bill" (creates a bill_session even if nothing was
+//     served yet — covers the dessert-paid-before-mains pattern)
+// A bill_session is the persistent tab that lives on the waiter "Bills" column
+// until "Payment Completed" is pressed. Multiple serves on the same table
+// reuse the same open bill (no duplicates).
+async function ensureBillSession(db, tableId, opts = {}) {
+  const { trigger = 'served', billRequested = false } = opts
+  const now = new Date()
+
+  // If there's already an open (not paid) bill for this table, just refresh
+  // its activity markers and bill_requested flag.
+  const existing = await db.collection('bill_sessions').findOne({
+    table_id: tableId,
+    status: { $in: ['awaiting_payment', 'bill_requested'] },
+  })
+  if (existing) {
+    const update = { updated_at: now }
+    if (trigger === 'served') update.last_served_at = now
+    if (billRequested) {
+      update.bill_requested = true
+      update.bill_requested_at = existing.bill_requested_at || now
+      if (existing.status === 'awaiting_payment') update.status = 'bill_requested'
+    }
+    if (Object.keys(update).length > 1) {
+      await db.collection('bill_sessions').updateOne({ id: existing.id }, { $set: update })
+    }
+    return await db.collection('bill_sessions').findOne({ id: existing.id })
+  }
+
+  // No open bill yet — open one. Link to the active table_session when we can.
+  const table = await db.collection('tables').findOne({ id: tableId })
+  const tableSession = await getActiveSession(db, tableId)
+  const bill = {
+    id: uuidv4(),
+    table_id: tableId,
+    table_number: table?.number || null,
+    table_session_id: tableSession?.id || null,
+    customer_name: tableSession?.customer_name || 'Guest',
+    status: billRequested ? 'bill_requested' : 'awaiting_payment',
+    payment_method: 'cash',
+    opened_at: now,
+    opened_by: trigger,  // 'served' | 'bill_requested' | 'manual'
+    last_served_at: trigger === 'served' ? now : null,
+    bill_requested: !!billRequested,
+    bill_requested_at: billRequested ? now : null,
+    paid_at: null,
+    closed_at: null,
+    created_at: now,
+    updated_at: now,
+  }
+  await db.collection('bill_sessions').insertOne(bill)
+  return bill
+}
+
 async function setTableStatus(db, tableId, status) {
   await db.collection('tables').updateOne({ id: tableId }, { $set: { status } })
 }
@@ -1001,6 +1057,78 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json(list.map(stripId)))
     }
 
+    // GET /waiter/bills (admin) — Bills column feed for the waiter dashboard.
+    // Returns the list of OPEN bills (status in awaiting_payment / bill_requested)
+    // for every table that has unpaid dine-in orders. Each row is enriched with
+    // live totals computed from the orders collection so the column always
+    // shows the up-to-date amount due. Use ?include=paid to also fetch recently
+    // closed bills for a quick history view.
+    if (route === '/waiter/bills' && method === 'GET') {
+      if (!isAdmin(request)) return handleCORS(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
+      const url = new URL(request.url)
+      const includePaid = url.searchParams.get('include') === 'paid'
+      const statusFilter = includePaid
+        ? {}
+        : { status: { $in: ['awaiting_payment', 'bill_requested'] } }
+
+      const bills = await db.collection('bill_sessions')
+        .find(statusFilter)
+        .sort({ bill_requested_at: -1, last_served_at: -1, opened_at: -1 })
+        .limit(200)
+        .toArray()
+
+      const enriched = await Promise.all(bills.map(async (b) => {
+        const table = await db.collection('tables').findOne({ id: b.table_id })
+        const tableSession = await db.collection('table_sessions').findOne({
+          $or: [
+            ...(b.table_session_id ? [{ id: b.table_session_id }] : []),
+            { table_id: b.table_id, session_status: 'active' },
+          ]
+        })
+
+        // Live unpaid orders for the table — same source the bill detail page reads.
+        const baseFilter = tableSession
+          ? { $or: [{ session_id: tableSession.id }, { table_id: b.table_id }] }
+          : { table_id: b.table_id }
+        const orders = await db.collection('orders').find({
+          ...baseFilter,
+          payment_status: { $ne: 'paid' },
+          status: { $nin: ['cancelled'] },
+        }).toArray()
+
+        const subtotal = orders.reduce((s, o) => {
+          const itemsSum = (o.items || []).reduce(
+            (x, it) => x + (parseFloat(it.price) || 0) * (parseInt(it.quantity) || 0),
+            0
+          )
+          return s + itemsSum
+        }, 0)
+        const vat = +(subtotal * 0.21).toFixed(2)
+        const tips = orders.reduce((s, o) => s + (parseFloat(o.tip) || 0), 0)
+        const total = +(subtotal + vat + tips).toFixed(2)
+
+        return {
+          ...stripId(b),
+          table_number: table?.number ?? b.table_number ?? null,
+          customer_name: tableSession?.customer_name || b.customer_name || 'Guest',
+          guests: tableSession?.guests ?? null,
+          order_count: orders.length,
+          totals: {
+            subtotal: +subtotal.toFixed(2),
+            vat,
+            tips: +tips.toFixed(2),
+            total,
+          },
+          // Convenience flag the UI can use to highlight stale-but-unpaid bills.
+          minutes_since_served: b.last_served_at
+            ? Math.floor((Date.now() - new Date(b.last_served_at).getTime()) / 60000)
+            : null,
+        }
+      }))
+
+      return handleCORS(NextResponse.json(enriched))
+    }
+
     // POST /waiter/notifications/:id/pickup (admin) — waiter takes the plate
     // off the pass. Updates BOTH the notification and the underlying order so
     // existing customer tracking (waiter_picked_up_at, serve_status) keeps working.
@@ -1043,8 +1171,18 @@ async function handleRoute(request, { params }) {
           updated_at: now,
         } }
       )
+      // Auto-open the bill for this table — waiter no longer needs to rescan
+      // the QR. The bill stays on the "Bills" column until Payment Completed.
+      let billSession = null
+      const order = await db.collection('orders').findOne({ id: notif.order_id })
+      if (order?.table_id) {
+        billSession = await ensureBillSession(db, order.table_id, { trigger: 'served' })
+      }
       const updated = await db.collection('waiter_notifications').findOne({ id: notif.id })
-      return handleCORS(NextResponse.json(stripId(updated)))
+      return handleCORS(NextResponse.json({
+        ...stripId(updated),
+        bill_session: billSession ? stripId(billSession) : null,
+      }))
     }
 
     // POST /orders/:id/waiter-pickup (admin) — legacy pickup endpoint kept for
@@ -1085,8 +1223,16 @@ async function handleRoute(request, { params }) {
         { order_id: path[1], status: { $in: ['pending', 'picked_up'] } },
         { $set: { status: 'served', served_at: now } }
       )
+      // Auto-open the bill for this table
+      let billSession = null
+      if (order.table_id) {
+        billSession = await ensureBillSession(db, order.table_id, { trigger: 'served' })
+      }
       const updated = await db.collection('orders').findOne({ id: path[1] })
-      return handleCORS(NextResponse.json(stripId(updated)))
+      return handleCORS(NextResponse.json({
+        ...stripId(updated),
+        bill_session: billSession ? stripId(billSession) : null,
+      }))
     }
 
     // POST /tables/:id/complete-payment (admin) — Close session, mark ALL unpaid orders paid, free table
@@ -1140,6 +1286,21 @@ async function handleRoute(request, { params }) {
         { $set: { status: 'resolved', resolved_at: now } }
       )
 
+      const paidTotal = unpaidOrders.reduce((s, o) => s + (parseFloat(o.total) || 0), 0)
+
+      // Close the bill_session(s) for this table — mark paid + archive
+      await db.collection('bill_sessions').updateMany(
+        { table_id: tableId, status: { $in: ['awaiting_payment', 'bill_requested'] } },
+        { $set: {
+          status: 'paid',
+          paid_at: now,
+          closed_at: now,
+          updated_at: now,
+          paid_total: +paidTotal.toFixed(2),
+          orders_closed: orderIds.length,
+        } }
+      )
+
       // If the session was linked to a reservation, mark it completed too
       if (session.reservation_id) {
         await db.collection('reservations').updateOne(
@@ -1148,7 +1309,6 @@ async function handleRoute(request, { params }) {
         )
       }
 
-      const paidTotal = unpaidOrders.reduce((s, o) => s + (parseFloat(o.total) || 0), 0)
       return handleCORS(NextResponse.json({
         ok: true,
         message: 'Payment completed and table closed',
@@ -1171,6 +1331,10 @@ async function handleRoute(request, { params }) {
       if (!table) return handleCORS(NextResponse.json({ error: 'Table not found' }, { status: 404 }))
 
       const session = await db.collection('table_sessions').findOne({ table_id: tableId, session_status: 'active' })
+      const billSession = await db.collection('bill_sessions').findOne({
+        table_id: tableId,
+        status: { $in: ['awaiting_payment', 'bill_requested'] },
+      })
 
       // If we have a session, prefer session_id; otherwise fall back to table_id
       // (covers older orders predating session-linking and walk-ins that ordered
@@ -1197,6 +1361,7 @@ async function handleRoute(request, { params }) {
       const debug = {
         table_id: tableId,
         active_session_id: session?.id || null,
+        bill_session_id: billSession?.id || null,
         fetched_count: cleanOrders.length,
         statuses: cleanOrders.map(o => o.status),
         payment_statuses: cleanOrders.map(o => o.payment_status || 'pending'),
@@ -1207,6 +1372,7 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json({
         table: stripId(table),
         session: session ? stripId(session) : null,
+        bill_session: billSession ? stripId(billSession) : null,
         orders: cleanOrders,
         totals: { subtotal: +subtotal.toFixed(2), vat, tips: +tips.toFixed(2), total },
         debug,
@@ -1242,6 +1408,14 @@ async function handleRoute(request, { params }) {
         resolved_at: null,
       }
       await db.collection('guest_requests').insertOne(request_doc)
+
+      // If the customer tapped "Request Bill", auto-open (or flag) the
+      // bill_session so it shows in the waiter's Bills column with the
+      // "Bill Requested" badge — even if nothing has been served yet.
+      if (body.request_type === 'bill') {
+        await ensureBillSession(db, body.table_id, { trigger: 'bill_requested', billRequested: true })
+      }
+
       return handleCORS(NextResponse.json(stripId(request_doc)), { status: 201 })
     }
 

@@ -105,6 +105,7 @@ function WaiterPage() {
   const [pwd, setPwd] = useState('')
   const [notifs, setNotifs] = useState([])
   const [guestRequests, setGuestRequests] = useState([])
+  const [bills, setBills] = useState([])
   const [now, setNow] = useState(Date.now())
   const [audioOn, setAudioOn] = useState(true)
   const prevPendingIdsRef = useRef(new Set())
@@ -177,6 +178,15 @@ function WaiterPage() {
     }
   }
 
+  const fetchBills = async (tk = token) => {
+    if (!tk) return
+    const res = await fetch('/api/waiter/bills', { headers: { 'x-admin-token': tk } })
+    if (res.ok) {
+      const data = await res.json()
+      setBills(Array.isArray(data) ? data : [])
+    }
+  }
+
   const resolveRequest = async (id) => {
     const res = await fetch(`/api/guest-requests/${id}`, {
       method: 'PATCH',
@@ -193,9 +203,11 @@ function WaiterPage() {
     if (!token) return
     fetchNotifs(token)
     fetchGuestRequests(token)
+    fetchBills(token)
     const i = setInterval(() => {
       fetchNotifs(token)
       fetchGuestRequests(token)
+      fetchBills(token)
     }, 3000)
     return () => clearInterval(i)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -209,7 +221,11 @@ function WaiterPage() {
     const res = await fetch(`/api/waiter/notifications/${id}/served`, {
       method: 'POST', headers: { 'x-admin-token': token },
     })
-    if (res.ok) { toast.success('✅ Served!'); fetchNotifs() }
+    if (res.ok) {
+      toast.success('✅ Served! Bill opened for table.')
+      fetchNotifs()
+      fetchBills()
+    }
     else toast.error('Failed to mark served')
   }
 
@@ -333,6 +349,106 @@ function WaiterPage() {
             </p>
           </div>
         </div>
+
+        {/* Bills Section — auto-populated when waiter taps "Served" or when a
+            customer taps "Request Bill". Persistent table tab until payment. */}
+        {bills.length > 0 && (
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-5 px-1">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-amber-400/15 ring-1 ring-amber-400/30 flex items-center justify-center">
+                  <Receipt className="h-5 w-5 text-amber-300" />
+                </div>
+                <div>
+                  <h2 className="font-serif text-3xl text-zinc-50 tracking-tight leading-none">Bills</h2>
+                  <p className="text-[11px] uppercase tracking-[0.3em] text-zinc-500 mt-1">
+                    {bills.filter(b => b.status === 'bill_requested').length > 0
+                      ? `${bills.filter(b => b.status === 'bill_requested').length} payment ready`
+                      : 'Awaiting payment'}
+                  </p>
+                </div>
+              </div>
+              <span className="font-mono text-4xl tabular-nums text-amber-300">
+                {String(bills.length).padStart(2, '0')}
+              </span>
+            </div>
+
+            <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {bills.map(bill => {
+                const isRequested = bill.status === 'bill_requested'
+                const sinceServedMs = bill.last_served_at
+                  ? now - new Date(bill.last_served_at).getTime()
+                  : (bill.opened_at ? now - new Date(bill.opened_at).getTime() : 0)
+                const isStale = sinceServedMs > 12 * 60 * 1000
+
+                const ring = isRequested
+                  ? 'ring-2 ring-purple-400/70 shadow-[0_0_42px_-8px_rgba(168,85,247,0.55)] animate-[pulse_1.6s_ease-in-out_infinite]'
+                  : isStale
+                    ? 'ring-1 ring-amber-500/60 shadow-[0_0_34px_-10px_rgba(245,158,11,0.4)]'
+                    : 'ring-1 ring-amber-400/30 shadow-[0_0_28px_-12px_rgba(212,165,74,0.35)]'
+
+                const statusLabel = isRequested ? 'Bill Requested' : 'Awaiting Payment'
+                const statusClasses = isRequested
+                  ? 'bg-purple-500/15 border-purple-500/40 text-purple-200'
+                  : 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+
+                return (
+                  <Link key={bill.id} href={`/waiter/table/${bill.table_id}`}>
+                    <div className={`group relative overflow-hidden rounded-2xl bg-zinc-950/70 backdrop-blur-xl ${ring} transition-all hover:-translate-y-0.5 cursor-pointer`}>
+                      {isRequested && (
+                        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-purple-300/80 to-transparent" />
+                      )}
+                      <div className="p-5">
+                        <div className="flex items-start justify-between mb-3 gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="bg-gradient-to-b from-amber-300 to-amber-500 text-zinc-950 px-4 py-1.5 rounded-md font-bold tracking-wide text-lg shadow-lg shadow-amber-500/30">
+                                Table {bill.table_number ?? '?'}
+                              </span>
+                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider uppercase border ${statusClasses}`}>
+                                {statusLabel}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm text-zinc-400">
+                              {bill.customer_name || 'Guest'}
+                              {bill.guests ? ` · ${bill.guests} guests` : ''}
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="font-mono text-3xl tabular-nums text-amber-200 leading-none">
+                              €{(bill.totals?.total ?? 0).toFixed(2)}
+                            </p>
+                            <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 mt-1">
+                              {bill.order_count} order{bill.order_count === 1 ? '' : 's'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between text-xs text-zinc-400 mb-3">
+                          <div className="flex items-center gap-1.5">
+                            <Clock className="h-3.5 w-3.5 opacity-70" />
+                            <span>
+                              {bill.last_served_at
+                                ? `Served ${formatElapsed(sinceServedMs)} ago`
+                                : `Opened ${formatElapsed(sinceServedMs)} ago`}
+                            </span>
+                          </div>
+                          <span className="uppercase tracking-wider text-[10px]">
+                            {bill.payment_method || 'Cash'}
+                          </span>
+                        </div>
+
+                        <Button className="w-full h-12 text-base font-semibold bg-gradient-to-b from-amber-300 to-amber-500 hover:from-amber-200 hover:to-amber-400 text-zinc-950 border-0 shadow-lg shadow-amber-500/25">
+                          <Receipt className="h-4 w-4 mr-2" /> Open Bill
+                        </Button>
+                      </div>
+                    </div>
+                  </Link>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Bill Requests Section */}
         {billRequests.length > 0 && (

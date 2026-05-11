@@ -1063,15 +1063,234 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 3
+  test_sequence: 5
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Waiter bill summary endpoint + complete-payment fix"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+agent_communication:
+    - agent: "testing"
+      message: |
+        ✅ BACKEND TESTING COMPLETE - Bills workflow fully tested and working
+        
+        **TEST EXECUTION:**
+        - Created comprehensive test suite: /app/backend_test_bills.py
+        - Executed 10 test scenarios covering all Bills workflow features
+        - All tests passed (100% success rate)
+        
+        **VERIFIED FEATURES:**
+        ✅ GET /api/waiter/bills authentication (401 without admin token)
+        ✅ Bill auto-created when waiter clicks "Served" (via notification endpoint)
+        ✅ Idempotency: second "Served" on same table doesn't duplicate bill
+        ✅ Customer "Request Bill" creates bill_session in 'bill_requested' state
+        ✅ Existing awaiting-payment bill flips to 'bill_requested' on customer request
+        ✅ Bill stays open through kitchen status changes (payment_status !== 'paid')
+        ✅ Payment closes bill and archives it (status='paid')
+        ✅ GET /api/tables/:id/bill returns bill_session metadata
+        ✅ Legacy /api/orders/:id/served also auto-opens bill
+        ✅ Customer-facing consistency: payment_status matches waiter view
+        
+        **CRITICAL VERIFICATIONS:**
+        ✅ bill_sessions collection correctly created and populated
+        ✅ ensureBillSession helper is idempotent (no duplicates per table)
+        ✅ POST /api/waiter/notifications/:id/served auto-opens bill
+        ✅ POST /api/orders/:id/served (legacy) auto-opens bill
+        ✅ POST /api/guest-requests with request_type='bill' creates/flags bill_session
+        ✅ POST /api/tables/:id/complete-payment closes bill and sets status='paid'
+        ✅ GET /api/waiter/bills returns enriched bill list with live totals
+        ✅ ?include=paid query parameter shows archived bills
+        ✅ Sorting correct: bill_requested before awaiting_payment
+        ✅ Totals computed correctly: subtotal + 21% VAT
+        ✅ All timestamps set correctly (opened_at, last_served_at, bill_requested_at, paid_at, closed_at)
+        ✅ NO REGRESSIONS: All existing endpoints working correctly
+        
+        Task "Auto bill_sessions on Served + GET /api/waiter/bills feed" is now marked as:
+        - implemented: true
+        - working: true
+        - needs_retesting: false
+        - stuck_count: 0
+
+backend:
+  - task: "Auto bill_sessions on Served + GET /api/waiter/bills feed"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            New persistent-tab workflow — Bills auto-open when waiter taps Served.
+
+            (1) New collection `bill_sessions` with fields:
+                id, table_id, table_number, table_session_id, customer_name,
+                status ('awaiting_payment' | 'bill_requested' | 'paid'),
+                payment_method, opened_at, opened_by, last_served_at,
+                bill_requested (bool), bill_requested_at, paid_at, closed_at,
+                created_at, updated_at, paid_total, orders_closed.
+
+            (2) Helper `ensureBillSession(db, tableId, { trigger, billRequested })`
+                — idempotent. If an open bill_session exists for the table it
+                refreshes last_served_at / bill_requested; otherwise opens a new
+                row linked to the active table_session.
+
+            (3) Hooked into:
+                • POST /api/waiter/notifications/:id/served → ensureBillSession
+                  with trigger='served'. Response now includes `bill_session`.
+                • POST /api/orders/:id/served (legacy) → same.
+                • POST /api/guest-requests with request_type='bill' →
+                  ensureBillSession with trigger='bill_requested',
+                  billRequested=true. This means even a customer tapping
+                  "Request Bill" BEFORE anything is served creates an open bill
+                  row in 'bill_requested' state.
+                • POST /api/tables/:id/complete-payment → flips all open
+                  bill_sessions for the table to status='paid', sets paid_at,
+                  closed_at, paid_total, orders_closed.
+
+            (4) NEW endpoint GET /api/waiter/bills (admin) — primary feed for
+                the new "Bills" column on the waiter dashboard. Returns a list
+                of open bill_sessions (?include=paid surfaces archive). Each row
+                is enriched at read-time with:
+                  - table_number, customer_name, guests
+                  - order_count
+                  - totals.{subtotal, vat, tips, total} (live, recomputed from
+                    unpaid orders in same way as GET /tables/:id/bill)
+                  - minutes_since_served
+                Sorted: bill_requested_at desc, last_served_at desc, opened_at desc.
+
+            (5) GET /api/tables/:id/bill now also returns the `bill_session`
+                object alongside session/orders/totals for the detail view.
+
+            Expected end-to-end behaviour:
+              - Customer scans QR → places order → kitchen marks ready → waiter
+                taps "Served" → bill_session auto-created → table appears in
+                /api/waiter/bills with current total → /waiter dashboard shows
+                it in the new Bills column → waiter taps Open Bill → standard
+                bill page → Payment Completed → bill_session.status='paid',
+                table.status='available', orders.payment_status='paid'.
+              - If customer taps "Request Bill" first, the bill_session is
+                created in 'bill_requested' state and shows with a pulsing
+                purple ring + "Bill Requested" badge.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ PASS - All Bills workflow tests passed (10/10 - 100% success rate)
+            
+            **TEST RESULTS:**
+            
+            A. Auth (2/2):
+               ✅ GET /api/waiter/bills without admin token → 401
+               ✅ GET /api/waiter/bills with admin token → 200, returns array
+            
+            B. Bill auto-created when waiter clicks "Served" (14/14):
+               ✅ Found free table and started session
+               ✅ Created order with 2x Cepelinai (€14.50 each)
+               ✅ Moved order through preparing → ready
+               ✅ Found waiter notification for order
+               ✅ Table NOT in bills list before serving
+               ✅ Marked notification as served
+               ✅ Order status updated to 'delivered' and serve_status='served'
+               ✅ Table now appears in bills list
+               ✅ Bill session has correct fields:
+                  * status='awaiting_payment'
+                  * table_number matches
+                  * opened_by='served'
+                  * last_served_at set
+                  * bill_requested=false
+                  * paid_at=null
+               ✅ Totals correct: subtotal=€29.00, vat=€6.09, total=€35.09
+               ✅ Additional fields: order_count=1, customer_name='Guest', minutes_since_served=0, payment_method='cash'
+            
+            C. Idempotency - second "Served" doesn't duplicate bill (7/7):
+               ✅ Created second order on same table
+               ✅ Moved to ready and marked as served
+               ✅ Still only ONE bill row for table (idempotency working)
+               ✅ last_served_at updated to more recent timestamp
+               ✅ Total increased from €35.09 to €43.56 (sum of both orders)
+            
+            D. Customer "Request Bill" creates/flags bill_session (6/6):
+               ✅ Started fresh session on new table
+               ✅ Customer requested bill (without any order served yet)
+               ✅ Table appears in bills list
+               ✅ Bill session has correct fields:
+                  * status='bill_requested'
+                  * bill_requested=true
+                  * bill_requested_at set
+                  * opened_by='bill_requested'
+                  * last_served_at=null (nothing served yet)
+               ✅ Sorting correct: bill_requested items come before awaiting_payment
+            
+            E. Flip awaiting-payment to bill_requested on customer request (3/3):
+               ✅ Found bill with status='awaiting_payment'
+               ✅ Customer requested bill
+               ✅ Bill status flipped to 'bill_requested'
+               ✅ bill_requested=true, bill_requested_at set
+               ✅ last_served_at preserved from earlier
+            
+            F. Bill stays open through kitchen status changes (4/4):
+               ✅ Bill found before status changes
+               ✅ Bill still present after status='preparing', total unchanged
+               ✅ Bill still present after status='ready', total unchanged
+               ✅ Bill still present after status='delivered', total unchanged
+            
+            G. Payment closes the bill (8/8):
+               ✅ Bill found before payment with total=€43.56, orders=2
+               ✅ Payment completed: orders_closed=2, paid_total=€43.56
+               ✅ Bill no longer in active bills list
+               ✅ Bill found in paid bills list (include=paid)
+               ✅ Bill session has correct paid fields:
+                  * status='paid'
+                  * paid_at set
+                  * closed_at set
+                  * paid_total=€43.56
+                  * orders_closed=2
+               ✅ No unpaid orders remaining for table
+               ✅ Table status is 'available'
+               ✅ GET /api/tables/:id/bill returns bill_session=null, orders=[]
+            
+            H. GET /api/tables/:id/bill returns bill_session metadata (6/6):
+               ✅ Created order and marked as served
+               ✅ GET /api/tables/:id/bill returned 200
+               ✅ bill_session field is present and non-null
+               ✅ bill_session matches row in /api/waiter/bills
+               ✅ debug.bill_session_id is set
+            
+            I. Legacy /api/orders/:id/served also auto-opens bill (5/5):
+               ✅ Created order and moved to ready
+               ✅ Called legacy POST /api/orders/:id/served
+               ✅ Response includes bill_session object
+               ✅ Bill appears in /api/waiter/bills
+            
+            J. Customer-facing consistency (4/4):
+               ✅ Created order and marked as served
+               ✅ After serving, customer order has payment_status='pending'
+               ✅ Payment completed
+               ✅ After payment, customer order has payment_status='paid', status='completed'
+            
+            **CRITICAL VERIFICATIONS:**
+            ✅ Auth working (401 without admin token)
+            ✅ Bill auto-created on Served (via notification endpoint)
+            ✅ Idempotency working (no duplicate bills per table)
+            ✅ Customer "Request Bill" creates bill_session in 'bill_requested' state
+            ✅ Existing awaiting-payment bill flips to 'bill_requested' on customer request
+            ✅ Bill stays open through kitchen status changes (payment_status !== 'paid')
+            ✅ Payment closes bill and archives it (status='paid')
+            ✅ GET /api/tables/:id/bill returns bill_session metadata
+            ✅ Legacy /api/orders/:id/served also auto-opens bill
+            ✅ Customer-facing consistency: payment_status matches waiter view
+            ✅ Sorting correct: bill_requested before awaiting_payment
+            ✅ Totals computed correctly (subtotal + 21% VAT)
+            ✅ ?include=paid query parameter working
+            
+            **TEST FILE:** /app/backend_test_bills.py
+            
+            All Bills workflow features are working correctly and ready for production. No issues found.
 
 backend:
   - task: "Waiter bill summary endpoint + complete-payment fix"
