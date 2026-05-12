@@ -508,6 +508,24 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json({ message: 'Aukstaitija API', status: 'ok' }))
     }
 
+    // ---------------- Build version (mobile cache-bust) ----------------
+    // Clients (VersionGuard) poll this on mount and hard-reload once when
+    // they detect a different build_id than the one stored in localStorage.
+    if (route === '/version' && method === 'GET') {
+      const build_id =
+        process.env.NEXT_PUBLIC_APP_VERSION ||
+        process.env.APP_VERSION ||
+        process.env.VERCEL_GIT_COMMIT_SHA ||
+        process.env.RENDER_GIT_COMMIT ||
+        'dev'
+      const res = NextResponse.json({ build_id, ts: Date.now() })
+      // Belt-and-suspenders: never cache the version probe itself.
+      res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+      res.headers.set('Pragma', 'no-cache')
+      res.headers.set('Expires', '0')
+      return handleCORS(res)
+    }
+
     // ---------------- Categories ----------------
     if (route === '/categories' && method === 'GET') {
       const cats = await db.collection('categories').find({}).sort({ order: 1 }).toArray()

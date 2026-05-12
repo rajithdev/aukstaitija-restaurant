@@ -4723,16 +4723,113 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.2"
-  test_sequence: 3
+  version: "1.3"
+  test_sequence: 4
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Mobile menu page scrolling UX refactor"
+    - "Mobile QR cache invalidation & deployment versioning"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+backend:
+  - task: "GET /api/version build-id endpoint for client cache-bust"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            New GET /api/version returns { build_id, ts }. build_id is sourced
+            from process.env.NEXT_PUBLIC_APP_VERSION (preferred) then
+            APP_VERSION / VERCEL_GIT_COMMIT_SHA / RENDER_GIT_COMMIT. The
+            response is forced to no-store so phones never cache the probe
+            itself. Verified: curl /api/version returns the same build id as
+            X-App-Version header on /menu, /table/:id, /order/:id.
+
+frontend:
+  - task: "Mobile QR cache invalidation & deployment versioning"
+    implemented: true
+    working: true
+    file: "next.config.js, app/layout.js, components/VersionGuard.js, app/admin/qr-sheet/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Hardened the customer-facing surfaces against stale mobile caches
+            after a deploy:
+              • next.config.js: stable generateBuildId (env-first, falls back
+                to a build-time timestamp), exposed as NEXT_PUBLIC_APP_VERSION
+                to the browser, and explicit Cache-Control: no-store /
+                Pragma: no-cache / Expires: 0 / Surrogate-Control: no-store
+                headers for /, /menu, /menu/:path*, /table/:path*,
+                /order/:path*, /track, /track/:path*, /reservation/:path*,
+                /cart, /checkout, and /api/:path*. Adds X-App-Version on every
+                response.
+              • app/layout.js: forces dynamic = 'force-dynamic',
+                fetchCache = 'force-no-store', revalidate = 0. Injects
+                Cache-Control / Pragma / Expires meta tags into <head>, plus
+                an inline pre-hydration script that (a) sets
+                window.__APP_VERSION__ from NEXT_PUBLIC_APP_VERSION, (b)
+                unregisters any ServiceWorker registrations left over from
+                previous deploys, and (c) wipes all Cache Storage entries
+                before React even hydrates.
+              • components/VersionGuard.js (client): mounted globally in
+                <body>. On mount it:
+                  1) re-runs the SW unregister + cache wipe (belt-and-braces),
+                  2) fetches /api/version with cache: 'no-store',
+                  3) compares the returned build_id to (a) window.__APP_VERSION__
+                     baked into the bundle and (b) localStorage.app_build_id.
+                     If either disagrees → hard-reload with ?_v=<ts>&_r=<reason>
+                     cache-buster, then store the new build_id. Rate-limited
+                     to one reload per 60s to avoid loops.
+                  4) re-checks on visibilitychange + pageshow so a phone that
+                     was backgrounded for hours re-validates the moment it
+                     returns to the foreground.
+              • app/admin/qr-sheet/page.js: newly generated QR codes now
+                encode /table/:id?v=<NEXT_PUBLIC_APP_VERSION> so freshly
+                printed sheets carry the current deployment marker. Already-
+                printed physical QRs continue to work — the cache-control
+                headers + VersionGuard force any stale phone to hard-reload
+                on the very next scan.
+
+            Manual verification on mobile viewport (390x844):
+              • curl -I /menu → Cache-Control: no-store, must-revalidate,
+                Pragma: no-cache, Expires: 0, X-App-Version: build-<ts>.
+              • curl /api/version → { build_id: build-<ts>, ts: <ms> } with
+                identical build_id.
+              • Page meta x-app-version matches window.__APP_VERSION__ matches
+                the curl probe build_id.
+              • Stale-build simulation: set localStorage.app_build_id =
+                'OLD-BUILD-FAKE' → next navigation triggers a hard reload to
+                /menu?_v=<ts>&_r=local-mismatch and localStorage is updated
+                to the live build id automatically.
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Mobile QR deployment-staleness hardened. Strategy is layered:
+          1. Server forces no-store on every customer-facing HTML route + API.
+          2. <head> injects pre-hydration script that unregisters stale SWs
+             and wipes Cache Storage before any code runs.
+          3. VersionGuard client component compares build_id (bundled vs
+             /api/version) and hard-reloads any phone that's running an old
+             shell, then on every visibilitychange / pageshow so a tab
+             restored from bfcache also re-validates.
+          4. QR sheet now adds ?v=<build> to newly printed URLs for an extra
+             defence in depth. Existing printed QRs still self-heal via
+             headers + VersionGuard.
+        No backend behavioural changes other than the new GET /api/version
+        endpoint. Frontend lint clean.
 
 frontend:
   - task: "Mobile menu page scrolling UX refactor"

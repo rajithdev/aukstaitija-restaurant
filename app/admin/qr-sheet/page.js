@@ -39,7 +39,12 @@ function QrSheetPage() {
       <div className="container mx-auto py-8 print:py-0">
         <div className="grid grid-cols-2 md:grid-cols-3 gap-6 print:gap-3">
           {tables.map(t => {
-            const url = `${origin}/table/${t.id}`
+            // Append a build-version query so freshly printed QR sheets
+            // encode the current deployment id. Existing physical QRs (which
+            // we cannot reprint) are still fine because the cache-control
+            // headers + <VersionGuard /> client check force any stale phone
+            // to hard-reload as soon as a deployment changes.
+            const url = `${origin}/table/${t.id}?v=${encodeURIComponent(process.env.NEXT_PUBLIC_APP_VERSION || 'live')}`
             const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=0&data=${encodeURIComponent(url)}`
             return (
               <Card key={t.id} className="bg-white text-black p-6 break-inside-avoid print:border-2 print:border-black print:shadow-none">
