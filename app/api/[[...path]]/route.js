@@ -2053,6 +2053,35 @@ async function handleRoute(request, { params }) {
       }))
     }
 
+    // GET /tables/:id/active-order — PUBLIC (hybrid dine-in flow)
+    // Returns { session, order } where `order` is the most-recent non-cancelled
+    // order on the active session (if any). The QR welcome screen polls this
+    // so that when a waiter places an order at the POS for the same table the
+    // customer is auto-redirected to the order tracking dashboard.
+    if (path[0] === 'tables' && path.length === 3 && path[2] === 'active-order' && method === 'GET') {
+      const table = await db.collection('tables').findOne({ id: path[1] })
+      if (!table) return handleCORS(NextResponse.json({ error: 'Not found' }, { status: 404 }))
+      const session = await getActiveSession(db, path[1])
+      let order = null
+      if (session) {
+        // Prefer the most recently created non-cancelled order on this session.
+        order = await db.collection('orders')
+          .find({ session_id: session.id, status: { $nin: ['cancelled'] } })
+          .sort({ created_at: -1 })
+          .limit(1)
+          .next()
+      }
+      const res = NextResponse.json({
+        ok: true,
+        table: { id: table.id, number: table.number, section: table.section, capacity: table.capacity },
+        session: session ? stripId(session) : null,
+        order: order ? stripId(order) : null,
+      })
+      // Never cache — clients poll this on a short interval
+      res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+      return handleCORS(res)
+    }
+
     // POST /tables/:id/start-session — PUBLIC (QR scan auto-occupy)
     // Idempotent: if active session exists, returns it. Otherwise creates a walk-in session and sets table=occupied.
     if (path[0] === 'tables' && path.length === 3 && path[2] === 'start-session' && method === 'POST') {

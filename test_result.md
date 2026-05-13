@@ -4723,16 +4723,97 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.3"
-  test_sequence: 4
+  version: "1.4"
+  test_sequence: 5
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Mobile QR cache invalidation & deployment versioning"
+    - "Hybrid QR welcome flow (Open Menu / Request Waiter) + waiter-placed order auto-redirect"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+backend:
+  - task: "GET /api/tables/:id/active-order public endpoint for hybrid flow"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            New PUBLIC endpoint GET /api/tables/:id/active-order returns
+            { ok, table, session, order } where `order` is the most-recent
+            non-cancelled order on the table's active session (or null). Forced
+            Cache-Control: no-store so polling clients always see fresh data.
+            Verified with curl: returns the existing order on table t1 with
+            session_id linkage intact. End-to-end POS-creates-order →
+            customer-redirected timing measured at ~5s (matches polling).
+
+frontend:
+  - task: "Hybrid QR welcome flow + waiter-placed order auto-redirect"
+    implemented: true
+    working: true
+    file: "app/table/[id]/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Rebuilt /table/[id] to support BOTH digital self-ordering AND
+            traditional waiter service from the same QR scan:
+              • Welcome card retains the premium dark layout (gold-gradient
+                Table N, Aukštaitija serif heading, session-state pill).
+              • Two equal-width stacked CTAs on mobile:
+                  PRIMARY  "Open Menu"        (gold, h-12, fork icon)
+                  SECONDARY "Request Waiter"  (outlined, h-12, bell icon)
+                Layout is identical on desktop with the card centred.
+              • Tapping "Request Waiter" POSTs /api/guest-requests with
+                request_type='waiter', table_id, and a note tagging the
+                welcome screen as the origin. The button optimistically
+                transforms into a confirmation pill: "Your server is on the
+                way to Table N" plus a sonner toast.
+              • Polling loop: every 5s (plus on visibilitychange) the page
+                hits /api/tables/:id/active-order. As soon as ANY non-
+                cancelled order exists on the active session — whether the
+                customer placed it themselves or the waiter created it at
+                the POS — the page transitions to a celebration screen
+                ("Confirmed · Your order has been placed · Order #AK…")
+                and after 1.6s redirects to /order/<id> (the existing live
+                tracking dashboard). redirectedRef guards against double
+                navigation if the poll fires twice.
+              • Help copy at the bottom explains the hybrid model: "Prefer
+                the traditional experience? Tap Request Waiter and we'll
+                take your order at the table. Your live order tracker opens
+                automatically once we send it to the kitchen."
+            End-to-end Playwright verification:
+              1. Loaded /table/t9 (mobile 390x844) → welcome card rendered.
+              2. Tapped Request Waiter → guest_request row created, button
+                 swapped to "Your server is on the way to Table 9" pill.
+              3. Simulated waiter-side POST /api/orders (admin-auth, table
+                 t9, dish=Cepelinai) → order AK236458 created with
+                 session_id linked to the QR-scan session.
+              4. Within ~7s the welcome page showed "Your order has been
+                 placed · Opening live tracking…" and the URL transitioned
+                 to /order/874d4ff8-c9a9-4345-97ca-5dfa38d90746 showing the
+                 full live tracking timeline.
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Hybrid dine-in flow shipped. Session-linking required no schema
+        change because orders already carry session_id and start-session is
+        idempotent. The new public /api/tables/:id/active-order endpoint is
+        the single source of truth the welcome page polls; the waiter
+        dashboard already polls /api/guest-requests so "Request Waiter"
+        notifications show there automatically without any waiter-side
+        changes. Verified end-to-end on mobile + desktop viewports.
 
 backend:
   - task: "GET /api/version build-id endpoint for client cache-bust"
