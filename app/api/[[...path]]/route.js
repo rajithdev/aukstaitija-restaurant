@@ -2054,19 +2054,27 @@ async function handleRoute(request, { params }) {
     }
 
     // GET /tables/:id/active-order — PUBLIC (hybrid dine-in flow)
-    // Returns { session, order } where `order` is the most-recent non-cancelled
-    // order on the active session (if any). The QR welcome screen polls this
-    // so that when a waiter places an order at the POS for the same table the
-    // customer is auto-redirected to the order tracking dashboard.
+    // Returns { session, order } where `order` is the most-recent ACTIVE order
+    // on the active session (if any). The QR welcome screen polls this so that
+    // when a waiter places an order at the POS for the same table the customer
+    // is auto-redirected to the order tracking dashboard.
+    //
+    // IMPORTANT: Only returns orders that are ACTIVE (received/preparing/ready),
+    // NOT delivered/completed orders. A delivered order means the customer has
+    // already been served and should NOT trigger tracking on QR re-scan.
     if (path[0] === 'tables' && path.length === 3 && path[2] === 'active-order' && method === 'GET') {
       const table = await db.collection('tables').findOne({ id: path[1] })
       if (!table) return handleCORS(NextResponse.json({ error: 'Not found' }, { status: 404 }))
       const session = await getActiveSession(db, path[1])
       let order = null
       if (session) {
-        // Prefer the most recently created non-cancelled order on this session.
+        // Only return ACTIVE orders (kitchen workflow in progress).
+        // Delivered/completed/cancelled orders should NOT trigger tracking redirect.
         order = await db.collection('orders')
-          .find({ session_id: session.id, status: { $nin: ['cancelled'] } })
+          .find({
+            session_id: session.id,
+            status: { $in: ['received', 'preparing', 'ready'] }
+          })
           .sort({ created_at: -1 })
           .limit(1)
           .next()
