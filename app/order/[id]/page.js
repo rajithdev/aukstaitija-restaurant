@@ -159,6 +159,75 @@ function OrderTrack() {
 
   const isDelivery = order.type === 'delivery'
   const isDineIn = !isDelivery && (order.order_type === 'dine_in' || order.type === 'dine-in' || !!order.table_id)
+  
+  // Check if dining session is completed (payment done)
+  const sessionCompleted = isDineIn && order.payment_status === 'paid'
+  
+  // Show farewell screen if session is completed
+  if (sessionCompleted) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="container max-w-2xl py-16 sm:py-24">
+          <div className="text-center space-y-8 animate-in fade-in duration-700">
+            {/* Success Icon */}
+            <div className="flex justify-center">
+              <div className="relative">
+                <div className="absolute inset-0 bg-amber-400/20 blur-3xl rounded-full animate-pulse" />
+                <div className="relative h-24 w-24 rounded-full bg-gradient-to-br from-amber-400/20 to-amber-600/20 ring-2 ring-amber-400/40 flex items-center justify-center">
+                  <CheckCircle2 className="h-14 w-14 text-amber-400 animate-in zoom-in duration-500 delay-200" />
+                </div>
+              </div>
+            </div>
+
+            {/* Headline */}
+            <div className="space-y-3">
+              <h1 className="text-3xl sm:text-4xl font-serif font-bold text-foreground">
+                Thank you for dining with us
+              </h1>
+              <p className="text-lg text-muted-foreground max-w-md mx-auto">
+                We hope you enjoyed your experience at Aukštaitija.
+              </p>
+              {order.table_number && (
+                <p className="text-sm text-muted-foreground/70">
+                  Table {order.table_number} session closed successfully.
+                </p>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex flex-col sm:flex-row gap-4 justify-center pt-6">
+              <Link href="/menu">
+                <Button size="lg" className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-lg">
+                  <Utensils className="h-5 w-5 mr-2" />
+                  Browse Menu Again
+                </Button>
+              </Link>
+              <Link href="/reservations">
+                <Button size="lg" variant="outline" className="w-full sm:w-auto border-2 font-semibold">
+                  <Clock className="h-5 w-5 mr-2" />
+                  Reserve a Table
+                </Button>
+              </Link>
+            </div>
+
+            {/* Footer Message */}
+            <div className="pt-12">
+              <p className="text-sm text-muted-foreground/60 italic">
+                See you again soon
+              </p>
+            </div>
+
+            {/* Optional Decorative Logo Watermark */}
+            <div className="pt-8 opacity-10">
+              <div className="text-6xl font-serif text-muted-foreground">Ą</div>
+            </div>
+          </div>
+        </div>
+        <Footer />
+      </div>
+    )
+  }
   // Post-served hospitality mode trigger: waiter pressed "Served" OR order
   // moved to delivered. Only meaningful for dine-in customers.
   const isServed = isDineIn && (order.serve_status === 'served' || order.status === 'delivered')
