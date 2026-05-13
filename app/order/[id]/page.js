@@ -308,10 +308,7 @@ function OrderTrack() {
                   const Icon = s.icon
                   const reached = i <= currentIdx
                   const isCurrent = i === currentIdx
-                  // Use custom label for "ready" stage in dine-in, otherwise use translation
-                  const label = (kind === 'dinein' && s.key === 'ready')
-                    ? 'Food ready — on the way to your table'
-                    : t(`track_stage.${kind}.${s.key}`)
+                  const label = t(`track_stage.${kind}.${s.key}`)
                   return (
                     <li key={s.key} className="ml-6">
                       <div className={`absolute -left-3 w-6 h-6 rounded-full flex items-center justify-center ${reached ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'} ${isCurrent ? 'ring-4 ring-primary/30 animate-pulse' : ''}`}>
