@@ -2731,8 +2731,8 @@ async function handleRoute(request, { params }) {
       const excludeIds = new Set([body.dish_id, ...(body.favorites || []), ...(body.history || [])].filter(Boolean))
       const candidates = allDishes.filter(d => !excludeIds.has(d.id))
 
-      const llmKey = process.env.EMERGENT_LLM_KEY
-      const llmUrl = process.env.EMERGENT_LLM_URL || 'https://integrations.emergentagent.com/llm/v1/chat/completions'
+      const llmKey = process.env.LLM_KEY
+      const llmUrl = process.env.LLM_URL || 'https://api.openai.com/v1/chat/completions'
 
       // Helper: rule-based fallback
       function ruleBased() {
