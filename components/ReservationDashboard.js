@@ -1,3 +1,4 @@
+// © 2025 Rajith Raja — Velora Systems. All rights reserved. Unauthorised copying or redistribution is prohibited.
 'use client'
 import { useState, useMemo, useEffect, useRef } from 'react'
 import Link from 'next/link'

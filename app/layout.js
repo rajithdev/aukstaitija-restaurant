@@ -1,3 +1,4 @@
+// © 2025 Rajith Raja — Velora Systems. All rights reserved. Unauthorised copying or redistribution is prohibited.
 import './globals.css'
 import { AppProvider } from '@/lib/AppContext'
 import { Toaster } from '@/components/ui/sonner'

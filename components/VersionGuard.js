@@ -1,3 +1,4 @@
+// © 2025 Rajith Raja — Velora Systems. All rights reserved. Unauthorised copying or redistribution is prohibited.
 'use client'
 import { useEffect } from 'react'
 

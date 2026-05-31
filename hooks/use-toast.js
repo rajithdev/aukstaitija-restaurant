@@ -1,3 +1,4 @@
+// © 2025 Rajith Raja — Velora Systems. All rights reserved. Unauthorised copying or redistribution is prohibited.
 "use client";
 // Inspired by react-hot-toast library
 import * as React from "react"

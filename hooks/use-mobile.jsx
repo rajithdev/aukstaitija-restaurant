@@ -1,3 +1,4 @@
+// © 2025 Rajith Raja — Velora Systems. All rights reserved. Unauthorised copying or redistribution is prohibited.
 import * as React from "react"
 
 const MOBILE_BREAKPOINT = 768

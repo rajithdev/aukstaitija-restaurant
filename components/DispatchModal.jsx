@@ -1,3 +1,4 @@
+// © 2025 Rajith Raja — Velora Systems. All rights reserved. Unauthorised copying or redistribution is prohibited.
 'use client'
 import { useState } from 'react'
 import { Card } from '@/components/ui/card'

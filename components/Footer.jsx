@@ -1,3 +1,4 @@
+// © 2025 Rajith Raja — Velora Systems. All rights reserved. Unauthorised copying or redistribution is prohibited.
 'use client'
 import { useApp } from '@/lib/AppContext'
 import { MapPin, Phone, Mail, Clock, Instagram, Facebook } from 'lucide-react'
